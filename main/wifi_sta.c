@@ -24,6 +24,8 @@ static EventGroupHandle_t s_wifi_event_group;
 #define WIFI_SMARTCONFIG_BIT	BIT2
 
 char is_wifi_connected;
+static char s_smartconfig_running;
+static char s_sc_got_credentials;
 
 static void smartconfig_example_task(void* parm)
 {
@@ -39,13 +41,13 @@ static void smartconfig_example_task(void* parm)
 		if (uxBits & WIFI_CONNECTED_BIT)
 		{
 			ESP_LOGI(TAG, "WiFi Connected to ap");
-			vTaskDelete(NULL);
-	   }
+		}
 
 		if (uxBits & WIFI_SMARTCONFIG_BIT) 
 		{
 			ESP_LOGI(TAG, "smartconfig over");
 			esp_smartconfig_stop();
+			s_smartconfig_running = 0;
 			vTaskDelete(NULL);
 		}
 	}
@@ -55,16 +57,28 @@ static void event_handler(void *arg, esp_event_base_t event_base, int32_t event_
 {
 	if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START)
 	{
+		s_smartconfig_running = 1;
+		s_sc_got_credentials = 0;
 		xTaskCreate(smartconfig_example_task, "smartconfig_example_task", 4096, NULL, 3, NULL);
 	}
 	else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
 	{
 		is_wifi_connected = 0;
-		esp_wifi_connect();
 		xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
+		if (!s_smartconfig_running || s_sc_got_credentials)
+		{
+			esp_wifi_connect();
+		}
 		// xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
 		ESP_LOGI(TAG, "connect to the AP fail!");
-		ESP_LOGI(TAG, "retry to connect to the AP...");
+		if (!s_smartconfig_running || s_sc_got_credentials)
+		{
+			ESP_LOGI(TAG, "retry to connect to the AP...");
+		}
+		else
+		{
+			ESP_LOGI(TAG, "waiting for smartconfig credentials...");
+		}
 	}
 	else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP)
 	{
@@ -111,6 +125,7 @@ static void event_handler(void *arg, esp_event_base_t event_base, int32_t event_
 			ESP_LOGI(TAG, "RVD_DATA:%s", rvd_data);
 		}
 
+		s_sc_got_credentials = 1;
 		ESP_ERROR_CHECK(esp_wifi_disconnect());
 		ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config));
 		ESP_ERROR_CHECK(esp_wifi_connect());
@@ -132,6 +147,7 @@ void wifi_init_sta(char *ssid, char *passwd)
 
 	wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
 	ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+	ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 
 	ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
 	ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL));
