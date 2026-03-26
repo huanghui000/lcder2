@@ -1,0 +1,22 @@
+{
+	"folders": [
+		{
+			"path": "../../.."
+		}
+	],
+	"settings": {
+		"files.associations": {
+			"task.h": "c",
+			"esp_netif.h": "c",
+			"freertos.h": "c",
+			"esp_log.h": "c",
+			"lcd_st75161.h": "c",
+			"lv_theme_mono.h": "c",
+			"lvgl.h": "c",
+			"ui.h": "c",
+			"lv_gif.h": "c",
+			"lv_port_disp.h": "c",
+			"lv_qrcode.h": "c"
+		}
+	}
+}
