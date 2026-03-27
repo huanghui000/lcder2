@@ -81,8 +81,8 @@ void lv_port_disp_init(void)
 #if 1
     /* Example for 1) */
     static lv_disp_draw_buf_t draw_buf_dsc;
-    static lv_color_t buf_1[MY_HOR_RES * 16];                          /*A buffer for 10 rows*/
-    lv_disp_draw_buf_init(&draw_buf_dsc, buf_1, NULL, MY_HOR_RES * 16);   /*Initialize the display buffer*/
+    static lv_color_t buf_1[MY_HOR_RES * 32];
+    lv_disp_draw_buf_init(&draw_buf_dsc, buf_1, NULL, MY_HOR_RES * 32);
 #endif
 #if 0
 	/* Example for 2) */
@@ -159,7 +159,6 @@ static void disp_flush(lv_disp_drv_t *disp_drv, const lv_area_t *area, lv_color_
 	// lv_memset_00(mono_disp_buf, pageCnt * colCnt);
 	memset(mono_disp_buf, 0x00, pageCnt * colCnt);
 
-	ESP_LOGI(TAG, "flushing (%d, %d), (%d, %d)...", area->x1, area->y1, area->x2, area->y2);
 	for (page = 0; page < pageCnt; page++)
 	{
 		for (i = 0; i < 8; i++)

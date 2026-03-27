@@ -28,6 +28,7 @@
 #include "nvs_flash.h"
 
 #include "lcd_st75161.h"
+#include "startup_ui.h"
 #include "wifi_sta.h"
 #include "http_seniverse.h"
 
@@ -120,7 +121,6 @@ void lv_task(void *pvParameters)
 #endif
 
 
-	ui_init();
 	keys_init();
 #if 0
 	lv_obj_t *obj = lv_calendar_create(lv_scr_act());
@@ -170,7 +170,6 @@ void lv_task(void *pvParameters)
 
 	static uint32_t inc= 0, on = 0;
 
-	xLvglMutex = xSemaphoreCreateMutex();
 	while (1)
 	{
 		int keyValues;
@@ -178,6 +177,7 @@ void lv_task(void *pvParameters)
 		vTaskDelay(10 / portTICK_RATE_MS);
 		xSemaphoreTake(xLvglMutex, portMAX_DELAY);
 		keyValues = lcd_spiiokey_get();
+		startup_ui_process();
 		lv_task_handler();
 		xSemaphoreGive(xLvglMutex);
 		
@@ -298,6 +298,14 @@ void app_main(void)
     lv_log_register_print_cb(lv_esp8266_log);
 	lv_init();
 	lv_port_disp_init();
+	xLvglMutex = xSemaphoreCreateMutex();
+	xSemaphoreTake(xLvglMutex, portMAX_DELAY);
+	ui_init();
+	startup_ui_init();
+	startup_ui_show_status("系统启动中", "正在准备主界面与网络服务", 8);
+	startup_ui_process();
+	lv_task_handler();
+	xSemaphoreGive(xLvglMutex);
 
 	// lv_obj_add_event_cb(btn, btn_event_cb, LV_EVENT_ALL, NULL); /*Assign a callback to the button*/
 
