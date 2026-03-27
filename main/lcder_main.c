@@ -43,8 +43,8 @@
 
 #include "ui.h"
 
-#define WIFI_SSID		"HelloWorld"
-#define WIFI_PASSWD		"1q2w3e4r!"
+#define WIFI_SSID		"test"
+#define WIFI_PASSWD		"test@1234"
 static char ssid[32] = WIFI_SSID;
 static char passwd[32] = WIFI_PASSWD;
 
@@ -185,7 +185,7 @@ void lv_task(void *pvParameters)
 		{
 			inc = 0;
 			// ESP_LOGI(TAG, "LV task...");
-			ESP_LOGI(TAG, "key values = %d", keyValues);
+			// ESP_LOGI(TAG, "key values = %d", keyValues);
 			if (on == 0)
 			{
 				// lv_led_off(led1);
