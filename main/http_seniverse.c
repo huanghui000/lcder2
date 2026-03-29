@@ -1,16 +1,15 @@
 #include "http_seniverse.h"
 
+#include <stdio.h>
 #include <string.h>
 #include <time.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
-#include "freertos/event_groups.h"
 
-#include "esp_system.h"
 #include "esp_log.h"
-#include "esp_netif.h"
-#include "esp_event.h"
+#include "esp_system.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 
@@ -22,429 +21,654 @@
 #include "ui.h"
 
 extern SemaphoreHandle_t xLvglMutex;
+extern char is_wifi_connected;
 
-EventGroupHandle_t eg_http_get;
+#define WEB_SERVER              "api.seniverse.com"
+#define WEB_PORT                "80"
+#define SENIVERSE_API_KEY       "smtq3n0ixdggurox"
+#define WEATHER_CFG_NAMESPACE   "weather_cfg"
+#define DEFAULT_LOCATION_ID     "laishan"
+#define DEFAULT_LOCATION_NAME   "Laishan"
 
-#define WEB_SERVER	"api.seniverse.com"
-#define WEB_PORT	80
-// #define WEB_URL		"http://api.seniverse.com/v3/weather/daily.json?key=rrpd2zmqkpwlsckt&location=laishan&language=zh-Hans&unit=c&start=0&days=3"
-// #define WEB_URL		"https://api.seniverse.com/v3/weather/daily.json?key=SCRu02Zdatz4cWpDk&location=yantai&language=zh-Hans&unit=c&start=0&days=2"
-#define WEB_URL		"http://api.seniverse.com/v3/weather/daily.json?key=smtq3n0ixdggurox&location=laishan&language=zh-Hans&unit=c&start=1&days=1"
-#define WEB_URL1	"http://api.seniverse.com/v3/weather/now.json?key=smtq3n0ixdggurox&location=laishan&language=zh-Hans&unit=c"
-
-static const char *REQUEST = "GET " WEB_URL "\r\n";
-static const char *REQUEST1 = "GET " WEB_URL1 "\r\n";
-
-// #define USE_SUNING   // quan.suning.com not working 20251116
-
-#ifdef USE_SUNING
-#define WEB_SERVER2	"quan.suning.com"
-#define WEB_PORT2	80
-#define WEB_URL2	"/getSysTime.do"
-
-// static const char *REQUEST2 = "GET " WEB_URL2 " HTTP/1.1\r\nHost: quan.suning.com\r\nConnection: close\r\n\r\n";
-static const char *REQUEST2 = "GET " WEB_URL2 " HTTP/1.1\r\nHost: quan.suning.com\r\n\r\n";
-// #define WEB_URL2	"https://quan.suning.com/getSysTime.do"
-// static const char *REQUEST2 = "GET " WEB_URL2 "\r\n";
-
-#endif
 static const char *TAG = "Http-GET";
 
+static SemaphoreHandle_t s_weather_cfg_mutex;
+static SemaphoreHandle_t s_http_task_mutex;
+static TaskHandle_t s_http_task_handle;
+static char s_refresh_pending;
+static char s_location_id[64] = DEFAULT_LOCATION_ID;
+static char s_location_name[64] = DEFAULT_LOCATION_NAME;
 
-static char * http_response_get_body(char *respond, size_t len)
-{
-	char *idx = respond;
-	int lfCnt = 0;
-	while (len > 0)
-	{
-		if (*idx == '\n')
-		{
-			lfCnt++;
-		}
-		else
-		{
-			lfCnt = 0;
-		}
-		idx++;
-		len--;
-		while (*idx == '\r' && len > 0)
-		{
-			idx++;
-			len--;
-		}
-		if (lfCnt ==2)
-		{
-			break;
-		}
-	}
-	return idx;
-}
-
-#ifdef USE_SUNING
-extern int settimeofday(const struct timeval* tv, const struct timezone* tz);
-#endif
 static const char weatherIconTbl[][3] =
 {
-	{0,'A',0},
-	{1,'A',0},
-	{2,'A',0},
-	{3,'A',0},
-	{4,'B',0},
-	{5,'B',0},
-	{6,'B',0},
-	{7,'B',0},
-	{8,'B',0},
-	{9,'C',0},
-	{10,'D',0},
-	{11,'D',0},
-	{12,'E',0},
-	{13,'F',0},
-	{14,'G',0},
-	{15,'H',0},
-	{16,'H',0},
-	{17,'H',0},
-	{18,'H',0},
-	{19,'I',0},
-	{20,'I',0},
-	{21,'J',0},
-	{22,'J',0},
-	{23,'K',0},
-	{24,'L',0},
-	{25,'L',0},
-	{26,'M',0},
-	{27,'M',0},
-	{28,'M',0},
-	{29,'M',0},
-	{30,'N',0},
-	{31,'O',0},
-	{32,'P',0},
-	{33,'P',0},
-	{34,'P',0},
-	{35,'P',0},
-	{36,'P',0},
-	{37,'Z',0},
-	{38,'A',0},
-	{99,'Z',0},
+    {0, 'A', 0}, {1, 'A', 0}, {2, 'A', 0}, {3, 'A', 0}, {4, 'B', 0},
+    {5, 'B', 0}, {6, 'B', 0}, {7, 'B', 0}, {8, 'B', 0}, {9, 'C', 0},
+    {10, 'D', 0}, {11, 'D', 0}, {12, 'E', 0}, {13, 'F', 0}, {14, 'G', 0},
+    {15, 'H', 0}, {16, 'H', 0}, {17, 'H', 0}, {18, 'H', 0}, {19, 'I', 0},
+    {20, 'I', 0}, {21, 'J', 0}, {22, 'J', 0}, {23, 'K', 0}, {24, 'L', 0},
+    {25, 'L', 0}, {26, 'M', 0}, {27, 'M', 0}, {28, 'M', 0}, {29, 'M', 0},
+    {30, 'N', 0}, {31, 'O', 0}, {32, 'P', 0}, {33, 'P', 0}, {34, 'P', 0},
+    {35, 'P', 0}, {36, 'P', 0}, {37, 'Z', 0}, {38, 'A', 0}, {99, 'Z', 0},
 };
 
-static const char * lookupWeatherCode(char * code_day)
+static char *http_response_get_body(char *respond, size_t len)
 {
-	char code;
-	int i;
-	if(code_day[1] == 0)
-	{
-		code = code_day[0] - '0';
-	}
-	else
-	{
-		code = code_day[1]-'0' + (code_day[0]-'0')*10;
-	}
-	i = 0;
-	while (code != weatherIconTbl[i][0])
-	{
-		if (i >= 39)
-		{
-			break;
-		}
-		i++;
-	}
-	return &weatherIconTbl[i][1];
+    char *idx = respond;
+    int lfCnt = 0;
+
+    while (len > 0)
+    {
+        if (*idx == '\n')
+        {
+            lfCnt++;
+        }
+        else
+        {
+            lfCnt = 0;
+        }
+
+        idx++;
+        len--;
+
+        while (len > 0 && *idx == '\r')
+        {
+            idx++;
+            len--;
+        }
+
+        if (lfCnt == 2)
+        {
+            break;
+        }
+    }
+
+    return idx;
 }
 
-int http_get_response(char *buf, int buf_len, char *server, const char *req)
+static const char *lookupWeatherCode(const char *code_day)
 {
-	const struct addrinfo hints = {
-		.ai_family = AF_INET,
-		.ai_socktype = SOCK_STREAM,
-	};
-	struct addrinfo *res;
-	struct in_addr *addr;
+    int code;
+    int i = 0;
 
-	int s, r, err;
+    if (code_day == NULL || code_day[0] == 0)
+    {
+        return &weatherIconTbl[39][1];
+    }
 
-	err = getaddrinfo(server, "80", &hints, &res);
-	if (err != 0 || res == NULL)
-	{
-		ESP_LOGE(TAG, "DNS lookup failed err=%d res=%p", err, res);
-		return -1;
-	}
-	/* Code to print the resolved IP.
-	Note: inet_ntoa is non-reentrant, look at ipaddr_ntoa_r for "real" code */
-	addr = &((struct sockaddr_in *)res->ai_addr)->sin_addr;
-	ESP_LOGI(TAG, "DNS lookup succeeded. IP=%s", inet_ntoa(*addr));
+    code = atoi(code_day);
+    while (code != weatherIconTbl[i][0])
+    {
+        if (i >= 39)
+        {
+            break;
+        }
+        i++;
+    }
 
-	// Create socket and connect
-	s = socket(res->ai_family, res->ai_socktype, 0);
-	if (s < 0)
-	{
-		ESP_LOGE(TAG, "... Failed to allocate socket.");
-		freeaddrinfo(res);
-		return -2;
-	}
-	ESP_LOGI(TAG, "... allocated socket");
-
-	if (connect(s, res->ai_addr, res->ai_addrlen) != 0)
-	{
-		ESP_LOGE(TAG, "... socket connect failed errno=%d", errno);
-		close(s);
-		freeaddrinfo(res);
-		return -3;
-	}
-	ESP_LOGI(TAG, "... connected");
-	freeaddrinfo(res);
-
-	ESP_LOGI(TAG, "REQ : %s", req);
-	// Get Command
-	if (write(s, req, strlen(req)) < 0)
-	{
-		ESP_LOGE(TAG, "... socket send failed");
-		close(s);
-		return -4;
-	}
-	ESP_LOGI(TAG, "... socket send success");
-
-	struct timeval rcv_to = {5, 0}; // timeout value : 5 seconds
-	if (setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &rcv_to, sizeof(rcv_to)) < 0)
-	{
-		ESP_LOGE(TAG, "... failed to set socket receiving timeout");
-		close(s);
-		return -5;
-	}
-	ESP_LOGI(TAG, "... set socket receiving timeout success");
-
-	// Read HTTP response
-	bzero(buf, buf_len);
-	int idx = 0;
-	do
-	{
-		r = read(s, buf + idx, buf_len - 1 - idx);
-		ESP_LOGI(TAG, buf + idx);
-		idx += r;
-	} while (r > 0 && idx < (buf_len - 1));
-
-	if (r < 0)
-	{
-		ESP_LOGI(TAG, "... reading error, Last read return=%d errno=%d\r\n", r, errno);
-		close(s);
-		return -6;
-	}
-
-	if (idx >= buf_len - 1)
-	{
-		ESP_LOGI(TAG, "Overflow of receive buffer. %d bytes are not enough! idx = %d", buf_len, idx);
-		close(s);
-		return -7;
-	}
-	close(s);
-	ESP_LOGI(TAG, "... done reading from socket. Last read return=%d errno=%d", r, errno);
-	return 0;
+    return &weatherIconTbl[i][1];
 }
 
-#ifdef USE_SUNING
-struct tm *get_tm_from_str(char *strTime)
+static esp_err_t load_weather_cfg_from_nvs(void)
 {
-	static struct tm tm_ = {0, 0, 0, 0, 0, 0, 0, 0, 0};
-	int i = 0;
-	int p[14];
-	while (i < 14)
-	{
-		p[i] = strTime[i] - '0';
-		if (p[i] >= 0 && p[i] <= 9)
-		{
-			i++;
-			continue;
-		}
-		else
-		{
-			memset(&tm_, 0, sizeof(struct tm));
-			return &tm_;
-		}
-	}
-	tm_.tm_year = p[0] * 1000 + p[1] * 100 + p[2] * 10 + p[3] - 1900;
-	tm_.tm_mon = p[4] * 10 + p[5] - 1;
-	tm_.tm_mday = p[6] * 10 + p[7];
-	tm_.tm_hour = p[8] * 10 + p[9];
-	tm_.tm_min = p[10] * 10 + p[11];
-	tm_.tm_sec = p[12] * 10 + p[13];
-	tm_.tm_isdst = 0;
-	return &tm_;
+    nvs_handle nvs_handle;
+    size_t len;
+    esp_err_t err;
+
+    err = nvs_open(WEATHER_CFG_NAMESPACE, NVS_READONLY, &nvs_handle);
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    len = sizeof(s_location_id);
+    err = nvs_get_str(nvs_handle, "location_id", s_location_id, &len);
+    if (err == ESP_OK)
+    {
+        len = sizeof(s_location_name);
+        err = nvs_get_str(nvs_handle, "location_name", s_location_name, &len);
+    }
+
+    nvs_close(nvs_handle);
+    return err;
 }
-#endif
+
+static esp_err_t save_weather_cfg_to_nvs(const char *location_id, const char *location_name)
+{
+    nvs_handle nvs_handle;
+    esp_err_t err;
+
+    err = nvs_open(WEATHER_CFG_NAMESPACE, NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    err = nvs_set_str(nvs_handle, "location_id", location_id);
+    if (err == ESP_OK)
+    {
+        err = nvs_set_str(nvs_handle, "location_name", location_name);
+    }
+    if (err == ESP_OK)
+    {
+        err = nvs_commit(nvs_handle);
+    }
+
+    nvs_close(nvs_handle);
+    return err;
+}
+
+static void copy_location_locked(char *id, size_t id_len, char *name, size_t name_len)
+{
+    if (id != NULL && id_len > 0)
+    {
+        strncpy(id, s_location_id, id_len);
+        id[id_len - 1] = 0;
+    }
+
+    if (name != NULL && name_len > 0)
+    {
+        strncpy(name, s_location_name, name_len);
+        name[name_len - 1] = 0;
+    }
+}
+
+static void set_location_locked(const char *id, const char *name)
+{
+    strncpy(s_location_id, id, sizeof(s_location_id));
+    s_location_id[sizeof(s_location_id) - 1] = 0;
+    strncpy(s_location_name, name, sizeof(s_location_name));
+    s_location_name[sizeof(s_location_name) - 1] = 0;
+}
+
+static void url_encode(const char *src, char *dst, size_t dst_len)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    size_t di = 0;
+
+    while (*src && di + 1 < dst_len)
+    {
+        unsigned char c = (unsigned char)*src++;
+
+        if ((c >= 'a' && c <= 'z') ||
+            (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') ||
+            c == '-' || c == '_' || c == '.' || c == '~')
+        {
+            dst[di++] = (char)c;
+        }
+        else if (di + 3 < dst_len)
+        {
+            dst[di++] = '%';
+            dst[di++] = hex[(c >> 4) & 0x0F];
+            dst[di++] = hex[c & 0x0F];
+        }
+        else
+        {
+            break;
+        }
+    }
+
+    dst[di] = 0;
+}
+
+int http_get_response(char *buf, int buf_len, const char *server, const char *req)
+{
+    static const struct addrinfo hints = {
+        .ai_family = AF_INET,
+        .ai_socktype = SOCK_STREAM,
+    };
+    static const struct timeval rcv_to = {5, 0};
+    struct addrinfo *res = NULL;
+    struct in_addr *addr;
+    int s;
+    int r;
+    int err;
+    int idx = 0;
+
+    ESP_LOGI(TAG, "http_get_response heap=%u stack_hwm=%u",
+        (unsigned)esp_get_free_heap_size(),
+        (unsigned)uxTaskGetStackHighWaterMark(NULL));
+
+    err = getaddrinfo(server, WEB_PORT, &hints, &res);
+    if (err != 0 || res == NULL)
+    {
+        ESP_LOGE(TAG, "DNS lookup failed err=%d res=%p", err, res);
+        return -1;
+    }
+
+    addr = &((struct sockaddr_in *)res->ai_addr)->sin_addr;
+    ESP_LOGI(TAG, "DNS lookup succeeded. IP=%s", inet_ntoa(*addr));
+
+    s = socket(res->ai_family, res->ai_socktype, 0);
+    if (s < 0)
+    {
+        freeaddrinfo(res);
+        return -2;
+    }
+
+    if (connect(s, res->ai_addr, res->ai_addrlen) != 0)
+    {
+        close(s);
+        freeaddrinfo(res);
+        return -3;
+    }
+
+    freeaddrinfo(res);
+
+    if (write(s, req, strlen(req)) < 0)
+    {
+        close(s);
+        return -4;
+    }
+
+    if (setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &rcv_to, sizeof(rcv_to)) < 0)
+    {
+        close(s);
+        return -5;
+    }
+
+    memset(buf, 0, buf_len);
+    do
+    {
+        r = read(s, buf + idx, buf_len - 1 - idx);
+        if (r > 0)
+        {
+            idx += r;
+        }
+    } while (r > 0 && idx < (buf_len - 1));
+
+    close(s);
+
+    if (r < 0)
+    {
+        return -6;
+    }
+    if (idx >= buf_len - 1)
+    {
+        return -7;
+    }
+
+    return 0;
+}
+
+static esp_err_t seniverse_request_json(const char *path, char *recv_buf, size_t recv_buf_len, cJSON **root_out)
+{
+    char *req;
+    char *body;
+    int err;
+    size_t req_len;
+
+    req_len = strlen(path) + strlen(WEB_SERVER) + 48;
+    req = malloc(req_len);
+    if (req == NULL)
+    {
+        return ESP_ERR_NO_MEM;
+    }
+
+    snprintf(req, req_len,
+        "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n",
+        path, WEB_SERVER);
+
+    ESP_LOGI(TAG, "request path=%s heap=%u stack_hwm=%u",
+        path,
+        (unsigned)esp_get_free_heap_size(),
+        (unsigned)uxTaskGetStackHighWaterMark(NULL));
+
+    err = http_get_response(recv_buf, (int)recv_buf_len, WEB_SERVER, req);
+    free(req);
+    if (err != 0)
+    {
+        ESP_LOGE(TAG, "HTTP request failed: %d, path=%s", err, path);
+        return ESP_FAIL;
+    }
+
+    body = http_response_get_body(recv_buf, strlen(recv_buf));
+    *root_out = cJSON_Parse(body);
+    if (*root_out == NULL)
+    {
+        ESP_LOGE(TAG, "response is not valid JSON");
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t seniverse_search_location(const char *query, char *location_id, size_t location_id_len,
+    char *location_name, size_t location_name_len,
+    char *location_detail, size_t location_detail_len)
+{
+    char encoded[192];
+    char path[320];
+    static char recv_buf[2048];
+    cJSON *root = NULL;
+    cJSON *results;
+    cJSON *first;
+    cJSON *id;
+    cJSON *name;
+    cJSON *path_item;
+    cJSON *country;
+    esp_err_t err;
+
+    if (query == NULL || query[0] == 0)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    url_encode(query, encoded, sizeof(encoded));
+    snprintf(path, sizeof(path),
+        "/v3/location/search.json?key=%s&q=%s&language=zh-Hans&limit=1",
+        SENIVERSE_API_KEY, encoded);
+
+    err = seniverse_request_json(path, recv_buf, sizeof(recv_buf), &root);
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    results = cJSON_GetObjectItem(root, "results");
+    first = (results && cJSON_IsArray(results) && cJSON_GetArraySize(results) > 0) ?
+        cJSON_GetArrayItem(results, 0) : NULL;
+    id = first ? cJSON_GetObjectItem(first, "id") : NULL;
+    name = first ? cJSON_GetObjectItem(first, "name") : NULL;
+    path_item = first ? cJSON_GetObjectItem(first, "path") : NULL;
+    country = first ? cJSON_GetObjectItem(first, "country") : NULL;
+
+    if (id == NULL || name == NULL || !cJSON_IsString(id) || !cJSON_IsString(name))
+    {
+        cJSON_Delete(root);
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    strncpy(location_id, id->valuestring, location_id_len);
+    location_id[location_id_len - 1] = 0;
+    strncpy(location_name, name->valuestring, location_name_len);
+    location_name[location_name_len - 1] = 0;
+
+    if (location_detail != NULL && location_detail_len > 0)
+    {
+        if (path_item && cJSON_IsString(path_item))
+        {
+            snprintf(location_detail, location_detail_len,
+                "匹配路径：%s\n城市 ID：%s",
+                path_item->valuestring, id->valuestring);
+        }
+        else if (country && cJSON_IsString(country))
+        {
+            snprintf(location_detail, location_detail_len,
+                "国家/地区：%s\n城市 ID：%s",
+                country->valuestring, id->valuestring);
+        }
+        else
+        {
+            snprintf(location_detail, location_detail_len,
+                "城市 ID：%s",
+                id->valuestring);
+        }
+    }
+
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
+static esp_err_t fetch_daily_weather(const char *location_id, char *recv_buf, size_t recv_buf_len)
+{
+    char path[320];
+    cJSON *root = NULL;
+    cJSON *results;
+    cJSON *result0;
+    cJSON *daily;
+    cJSON *day;
+    esp_err_t err;
+
+    snprintf(path, sizeof(path),
+        "/v3/weather/daily.json?key=%s&location=%s&language=zh-Hans&unit=c&start=1&days=1",
+        SENIVERSE_API_KEY, location_id);
+
+    err = seniverse_request_json(path, recv_buf, recv_buf_len, &root);
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    results = cJSON_GetObjectItem(root, "results");
+    result0 = (results && cJSON_IsArray(results) && cJSON_GetArraySize(results) > 0) ?
+        cJSON_GetArrayItem(results, 0) : NULL;
+    daily = result0 ? cJSON_GetObjectItem(result0, "daily") : NULL;
+    day = (daily && cJSON_IsArray(daily) && cJSON_GetArraySize(daily) > 0) ?
+        cJSON_GetArrayItem(daily, 0) : NULL;
+
+    if (day != NULL)
+    {
+        cJSON *text_day = cJSON_GetObjectItem(day, "text_day");
+        cJSON *low = cJSON_GetObjectItem(day, "low");
+        cJSON *high = cJSON_GetObjectItem(day, "high");
+        cJSON *code_day = cJSON_GetObjectItem(day, "code_day");
+
+        if (text_day && low && high && code_day)
+        {
+            xSemaphoreTake(xLvglMutex, portMAX_DELAY);
+            lv_label_set_text(ui_LabelWeather1, text_day->valuestring);
+            lv_label_set_text_fmt(ui_LabelTemp1, "%s/%s℃", low->valuestring, high->valuestring);
+            lv_label_set_text(ui_LabelWeatherIcon1, lookupWeatherCode(code_day->valuestring));
+            xSemaphoreGive(xLvglMutex);
+        }
+    }
+
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
+static esp_err_t fetch_now_weather(const char *location_id, char *recv_buf, size_t recv_buf_len)
+{
+    char path[320];
+    cJSON *root = NULL;
+    cJSON *results;
+    cJSON *result0;
+    cJSON *location;
+    cJSON *now;
+    esp_err_t err;
+
+    snprintf(path, sizeof(path),
+        "/v3/weather/now.json?key=%s&location=%s&language=zh-Hans&unit=c",
+        SENIVERSE_API_KEY, location_id);
+
+    err = seniverse_request_json(path, recv_buf, recv_buf_len, &root);
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    results = cJSON_GetObjectItem(root, "results");
+    result0 = (results && cJSON_IsArray(results) && cJSON_GetArraySize(results) > 0) ?
+        cJSON_GetArrayItem(results, 0) : NULL;
+    location = result0 ? cJSON_GetObjectItem(result0, "location") : NULL;
+    now = result0 ? cJSON_GetObjectItem(result0, "now") : NULL;
+
+    if (location != NULL && now != NULL)
+    {
+        cJSON *name = cJSON_GetObjectItem(location, "name");
+        cJSON *text = cJSON_GetObjectItem(now, "text");
+        cJSON *code = cJSON_GetObjectItem(now, "code");
+        cJSON *temperature = cJSON_GetObjectItem(now, "temperature");
+
+        if (name && text && code && temperature)
+        {
+            xSemaphoreTake(xLvglMutex, portMAX_DELAY);
+            lv_label_set_text(ui_LabelAddr, name->valuestring);
+            lv_label_set_text(ui_LabelWeather, text->valuestring);
+            lv_label_set_text(ui_LabelWeatherIcon, lookupWeatherCode(code->valuestring));
+            lv_label_set_text_fmt(ui_LabelTemp, "%s℃", temperature->valuestring);
+            xSemaphoreGive(xLvglMutex);
+        }
+    }
+
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
+void http_seniverse_init(void)
+{
+    s_weather_cfg_mutex = xSemaphoreCreateMutex();
+    s_http_task_mutex = xSemaphoreCreateMutex();
+
+    if (load_weather_cfg_from_nvs() == ESP_OK)
+    {
+        ESP_LOGI(TAG, "loaded weather location from NVS: %s (%s)", s_location_name, s_location_id);
+    }
+    else
+    {
+        ESP_LOGI(TAG, "using default weather location: %s (%s)", s_location_name, s_location_id);
+    }
+}
+
+esp_err_t http_seniverse_get_location(char *id, size_t id_len, char *name, size_t name_len)
+{
+    if (s_weather_cfg_mutex == NULL)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    xSemaphoreTake(s_weather_cfg_mutex, portMAX_DELAY);
+    copy_location_locked(id, id_len, name, name_len);
+    xSemaphoreGive(s_weather_cfg_mutex);
+    return ESP_OK;
+}
+
+esp_err_t http_seniverse_set_location_by_query(const char *query,
+    char *resolved_name, size_t resolved_name_len,
+    char *resolved_detail, size_t resolved_detail_len)
+{
+    char new_id[64];
+    char new_name[64];
+    char new_detail[160];
+    esp_err_t err;
+
+    err = seniverse_search_location(query, new_id, sizeof(new_id), new_name, sizeof(new_name),
+        new_detail, sizeof(new_detail));
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    xSemaphoreTake(s_weather_cfg_mutex, portMAX_DELAY);
+    set_location_locked(new_id, new_name);
+    xSemaphoreGive(s_weather_cfg_mutex);
+
+    save_weather_cfg_to_nvs(new_id, new_name);
+
+    if (resolved_name != NULL && resolved_name_len > 0)
+    {
+        strncpy(resolved_name, new_name, resolved_name_len);
+        resolved_name[resolved_name_len - 1] = 0;
+    }
+
+    if (resolved_detail != NULL && resolved_detail_len > 0)
+    {
+        strncpy(resolved_detail, new_detail, resolved_detail_len);
+        resolved_detail[resolved_detail_len - 1] = 0;
+    }
+
+    http_seniverse_request_refresh();
+    return ESP_OK;
+}
+
+void http_seniverse_request_refresh(void)
+{
+    BaseType_t task_ok;
+
+    if (is_wifi_connected == 0)
+    {
+        ESP_LOGW(TAG, "skip weather refresh request because WiFi is not connected yet");
+        return;
+    }
+
+    if (s_http_task_mutex == NULL)
+    {
+        ESP_LOGW(TAG, "skip weather refresh request because HTTP task mutex is not ready");
+        return;
+    }
+
+    xSemaphoreTake(s_http_task_mutex, portMAX_DELAY);
+    if (s_http_task_handle != NULL)
+    {
+        s_refresh_pending = 1;
+        xSemaphoreGive(s_http_task_mutex);
+        ESP_LOGI(TAG, "weather refresh already running, mark one more refresh pending");
+        return;
+    }
+
+    s_refresh_pending = 0;
+    task_ok = xTaskCreate(http_get_task, "http_get_task", 4096, NULL, 5, &s_http_task_handle);
+    xSemaphoreGive(s_http_task_mutex);
+
+    if (task_ok == pdPASS)
+    {
+        ESP_LOGI(TAG, "spawn weather refresh task");
+    }
+    else
+    {
+        xSemaphoreTake(s_http_task_mutex, portMAX_DELAY);
+        s_http_task_handle = NULL;
+        xSemaphoreGive(s_http_task_mutex);
+        ESP_LOGE(TAG, "failed to create weather refresh task");
+    }
+}
 
 void http_get_task(void *pvParameters)
 {
-	int err;
-	char recv_buf[2048];
+    char location_id[64];
+    char location_name[64];
+    static char recv_buf[2048];
 
-	while (1)
-	{
-	// Wait for main task set the event bits
-		EventBits_t bits = xEventGroupWaitBits(eg_http_get,
-			HTTP_GET_TIME_BIT | HTTP_GET_WEATHER_BIT,
-			pdTRUE,				//xClearOnExit
-			pdFALSE,			//xWaitForAllBits
-			portMAX_DELAY);
-	// getting weather of next day
-		if (bits & HTTP_GET_WEATHER_BIT)
-		{
-			ESP_LOGI(TAG, "Getting weather...");
-			err = http_get_response(recv_buf, sizeof(recv_buf), WEB_SERVER, REQUEST);
-			if(err == 0)
-			{
-				// char *pBody = http_response_get_body(recv_buf, idx);
-				char *pBody = recv_buf;
-				// ESP_LOGI(TAG, "Http response body : %s", pBody);
-				cJSON *pjRoot = cJSON_Parse(pBody);
-				if (pjRoot != NULL)
-				{
-					cJSON *pjResult = cJSON_GetObjectItem(pjRoot, "results");
-					if (pjResult && cJSON_IsArray(pjResult))
-					{
-						int arrSize = cJSON_GetArraySize(pjResult);
-						if(1 == arrSize)
-						{
-							cJSON *pjRes0 = cJSON_GetArrayItem(pjResult, 0);
-							// location
-							cJSON *pjLoc = cJSON_GetArrayItem(pjRes0, 0);
-							ESP_LOGI(TAG, "Location : %s", cJSON_GetObjectItem(pjLoc, "name")->valuestring);
-							// daily
-							cJSON *pjDaily = cJSON_GetArrayItem(pjRes0, 1);
-							cJSON *day = cJSON_GetArrayItem(pjDaily, 0);
-							ESP_LOGI(TAG, "%s : %s %s~%s", cJSON_GetObjectItem(day, "date")->valuestring,
-									cJSON_GetObjectItem(day, "text_day")->valuestring,
-									cJSON_GetObjectItem(day, "low")->valuestring,
-									cJSON_GetObjectItem(day, "high")->valuestring);
+    (void)pvParameters;
 
-							xSemaphoreTake(xLvglMutex, portMAX_DELAY);
-							lv_label_set_text(ui_LabelWeather1,
-								cJSON_GetObjectItem(day, "text_day")->valuestring);
-							lv_label_set_text_fmt(ui_LabelTemp1, "%s/%s℃",
-								cJSON_GetObjectItem(day, "low")->valuestring,
-								cJSON_GetObjectItem(day, "high")->valuestring);
-							lv_label_set_text(ui_LabelWeatherIcon1,
-								lookupWeatherCode(cJSON_GetObjectItem(day, "code_day")->valuestring));
-							xSemaphoreGive(xLvglMutex);
-						}
-						else
-						{
-							ESP_LOGE(TAG, "Error - there are %d items in results.", arrSize);
-						}
-					}
-					else
-					{
-						ESP_LOGE(TAG, "Item of 'results' is not found!");
-					}
-					cJSON_Delete(pjRoot);
-				}
-				else
-				{
-					ESP_LOGE(TAG, "Http response is not json.");
-					ESP_LOGE(TAG, "Http response - %s", pBody);
-				}
-			}
-			else
-			{
-				ESP_LOGE(TAG, "Weather tomorrow getting error %d!", err);
-			}
-		// geting current weather information
-			err = http_get_response(recv_buf, sizeof(recv_buf), WEB_SERVER, REQUEST1);
-			if(err == 0)
-			{
-				// char *pBody = http_response_get_body(recv_buf, idx);
-				char *pBody = recv_buf;
-				//ESP_LOGI(TAG, "Http response body : %s", pBody);
-				cJSON *pjRoot = cJSON_Parse(pBody);
-				if (pjRoot != NULL)
-				{
-					cJSON *pjResult = cJSON_GetObjectItem(pjRoot, "results");
-					if (pjResult && cJSON_IsArray(pjResult))
-					{
-						int arrSize = cJSON_GetArraySize(pjResult);
-						if(1 == arrSize)
-						{
-							cJSON *pjRes0 = cJSON_GetArrayItem(pjResult, 0);
-							// location
-							cJSON *pjLoc = cJSON_GetArrayItem(pjRes0, 0);
-							ESP_LOGI(TAG, "Location : %s",
-								cJSON_GetObjectItem(pjLoc, "name")->valuestring);
-							// now
-							cJSON *pjNow = cJSON_GetArrayItem(pjRes0, 1);
-							ESP_LOGI(TAG, "%s,code: %s,%s℃",
-								cJSON_GetObjectItem(pjNow, "text")->valuestring,
-								cJSON_GetObjectItem(pjNow, "code")->valuestring,
-								cJSON_GetObjectItem(pjNow, "temperature")->valuestring);
-							// refresh the content of LCD
-							xSemaphoreTake(xLvglMutex, portMAX_DELAY);
-							lv_label_set_text_fmt(ui_LabelAddr, "%s",
-								cJSON_GetObjectItem(pjLoc, "name")->valuestring);
+    while (1)
+    {
+        char run_again = 0;
 
-							lv_label_set_text(ui_LabelWeather,
-								cJSON_GetObjectItem(pjNow, "text")->valuestring);
-							lv_label_set_text(ui_LabelWeatherIcon,
-								lookupWeatherCode(cJSON_GetObjectItem(pjNow, "code")->valuestring));
-							lv_label_set_text_fmt(ui_LabelTemp, "%s℃",
-								cJSON_GetObjectItem(pjNow, "temperature")->valuestring);
-							xSemaphoreGive(xLvglMutex);
-						}
-						else
-						{
-							ESP_LOGE(TAG, "Error - there are %d items in results.", arrSize);
-						}
-					}
-					else
-					{
-						ESP_LOGE(TAG, "Item of 'results' is not found!");
-					}
-					cJSON_Delete(pjRoot);
-				}
-				else
-				{
-					ESP_LOGE(TAG, "Http response is not json.");
-					ESP_LOGE(TAG, "Http response - %s", pBody);
-				}
-			}
-			else
-			{
-				ESP_LOGE(TAG, "Weather now getting error %d!", err);
-			}
-		}
+        if (is_wifi_connected == 0)
+        {
+            ESP_LOGW(TAG, "drop weather refresh because WiFi is disconnected");
+            break;
+        }
 
-#ifdef USE_SUNING
-		if (bits & HTTP_GET_TIME_BIT)
-		{
-			ESP_LOGI(TAG, "Getting time...");
+        xSemaphoreTake(s_weather_cfg_mutex, portMAX_DELAY);
+        copy_location_locked(location_id, sizeof(location_id), location_name, sizeof(location_name));
+        xSemaphoreGive(s_weather_cfg_mutex);
 
-			err = http_get_response(recv_buf, sizeof(recv_buf), WEB_SERVER2, REQUEST2);
-			if(err == 0)
-			{
-				char *pBody = http_response_get_body(recv_buf, strlen(recv_buf));
-				ESP_LOGI(TAG, "Http response body : %s", pBody);
-				// example : {"sysTime2":"2025-04-19 23:02:35","sysTime1":"20250419230235"}
-				cJSON *pjRoot = cJSON_Parse(pBody);
-				if (pjRoot != NULL)
-				{
-					ESP_LOGI(TAG, "sysTime1 : %s", cJSON_GetObjectItem(pjRoot, "sysTime1")->valuestring);
-					time_t t_ = mktime(get_tm_from_str(cJSON_GetObjectItem(pjRoot, "sysTime1")->valuestring));
-					struct timeval tv;
-					tv.tv_sec = t_;
-					tv.tv_usec = 0;
-					settimeofday(&tv, 0);
+        ESP_LOGI(TAG, "Getting weather for %s (%s), heap=%u stack_hwm=%u",
+            location_name, location_id,
+            (unsigned)esp_get_free_heap_size(),
+            (unsigned)uxTaskGetStackHighWaterMark(NULL));
 
-					cJSON_Delete(pjRoot);
-				}
-				else
-				{
-					ESP_LOGE(TAG, "Http response is not json.");
-					ESP_LOGE(TAG, "Http response - %s", pBody);
-				}
-			}
-			else
-			{
-				ESP_LOGE(TAG, "Time getting error %d!", err);
-			}
+        fetch_daily_weather(location_id, recv_buf, sizeof(recv_buf));
+        fetch_now_weather(location_id, recv_buf, sizeof(recv_buf));
 
-			ESP_LOGI(TAG, "Done getting time!");
-		}
-#endif
-	}
+        xSemaphoreTake(s_http_task_mutex, portMAX_DELAY);
+        run_again = s_refresh_pending;
+        s_refresh_pending = 0;
+        if (!run_again)
+        {
+            s_http_task_handle = NULL;
+        }
+        xSemaphoreGive(s_http_task_mutex);
+
+        if (!run_again)
+        {
+            ESP_LOGI(TAG, "weather refresh task finished");
+            break;
+        }
+
+        ESP_LOGI(TAG, "run one more pending weather refresh");
+    }
+
+    if (s_http_task_mutex != NULL)
+    {
+        xSemaphoreTake(s_http_task_mutex, portMAX_DELAY);
+        s_http_task_handle = NULL;
+        s_refresh_pending = 0;
+        xSemaphoreGive(s_http_task_mutex);
+    }
+
+    vTaskDelete(NULL);
 }

@@ -32,12 +32,6 @@ extern lv_obj_t * ui_Label2;
 extern lv_obj_t * ui_Label1;
 // CUSTOM VARIABLES
 
-// SCREEN: ui_Screen2
-void ui_Screen2_screen_init(void);
-extern lv_obj_t * ui_Screen2;
-extern lv_obj_t * ui_Calendar1;
-// CUSTOM VARIABLES
-
 // EVENTS
 
 extern lv_obj_t * ui____initial_actions0;

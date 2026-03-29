@@ -85,7 +85,7 @@ void ui_Screen1_screen_init(void)
     ui_LabelTime = lv_label_create(ui_Screen1);
     lv_obj_set_width(ui_LabelTime, lv_pct(61));
     lv_obj_set_height(ui_LabelTime, LV_SIZE_CONTENT);    /// 1
-    lv_obj_set_x(ui_LabelTime, 27);
+    lv_obj_set_x(ui_LabelTime, 30);
     lv_obj_set_y(ui_LabelTime, -135);
     lv_obj_set_align(ui_LabelTime, LV_ALIGN_BOTTOM_MID);
     lv_label_set_text(ui_LabelTime, "10:08");

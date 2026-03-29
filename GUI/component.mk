@@ -18,6 +18,7 @@ COMPONENT_SRCDIRS := . \
                   src/extra/themes \
                   src/extra/themes/basic \
                   src/extra/themes/default \
+                  src/extra/themes/mono \
                   src/extra/widgets/calendar \
                   src/extra/widgets/colorwheel \
                   src/extra/widgets \
