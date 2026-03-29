@@ -49,6 +49,7 @@
 static char ssid[32] = WIFI_SSID;
 static char passwd[32] = WIFI_PASSWD;
 
+#if 0
 void keys_init()
 {
 	gpio_config_t io_conf;
@@ -64,7 +65,7 @@ int keys_get()
 {
 	return gpio_get_level(GPIO_NUM_0);
 }
-
+#endif
 static const char *TAG = "lvgl";
 
 SemaphoreHandle_t xLvglMutex;
@@ -72,101 +73,6 @@ SemaphoreHandle_t xLvglMutex;
 void lv_task(void *pvParameters)
 {
 	ESP_LOGI(TAG, "lv_task start.");
-#if 0
-	lv_theme_t * th = lv_theme_mono_init(NULL, 1, &lv_font_montserrat_12);
-	lv_disp_set_theme(NULL, th);
-
-    lv_obj_t * btn = lv_btn_create(lv_scr_act());     /*Add a button the current screen*/
-    lv_obj_align(btn, LV_ALIGN_CENTER, 0, 0);
-    // lv_obj_set_pos(btn, 10, 10);                            /*Set its position*/
-    lv_obj_set_size(btn, 50, 30);                          /*Set its size*/
-
-	lv_style_t style_btn;
-	lv_style_init(&style_btn);
-
-	lv_style_set_radius(&style_btn, 10);
-	lv_style_set_border_width(&style_btn, 2);
-
-	lv_obj_add_style(btn, &style_btn, LV_STATE_DEFAULT);
-
-    lv_obj_t * label = lv_label_create(btn);          /*Add a label to the button*/
-    lv_label_set_text(label, "BTN");                     /*Set the labels text*/
-    lv_obj_center(label);
-#endif
-#if 0
-	lv_obj_t *obj = lv_bar_create(lv_scr_act());
-	lv_bar_set_range(obj, 0, 100);
-	lv_obj_set_size(obj, 100, 20);
-	lv_obj_set_align(obj, LV_ALIGN_CENTER);
-
-	lv_style_t style_bar;
-	lv_style_init(&style_bar);
-	lv_style_set_anim_time(&style_bar, 3000);
-
-	lv_obj_add_style(obj, &style_bar, LV_STATE_DEFAULT);
-
-	lv_bar_set_value(obj, 100, LV_ANIM_ON);
-	lv_calendar_date_t day;
-	day.year = 2022;
-	day.month = 11;
-	day.day = 11;
-
-	lv_obj_t *obj = lv_calendar_create(lv_scr_act());
-	lv_obj_set_size(obj, 160, 160);
-	lv_obj_set_align(obj, LV_ALIGN_CENTER);
-
-	lv_calendar_set_today_date(obj, 2022, 11, 22);
-	lv_calendar_set_showed_date(obj, 2022, 11);
-	lv_calendar_set_highlighted_dates(obj, &day, 1);
-#endif
-
-
-	keys_init();
-#if 0
-	lv_obj_t *obj = lv_calendar_create(lv_scr_act());
-	lv_obj_set_size(obj, 50, 50);
-	lv_obj_set_align(obj, LV_ALIGN_CENTER);
-
-	LV_IMG_DECLARE(ast);
-    lv_obj_t* img = lv_gif_create(obj);
-    lv_gif_set_src(img, &ast);
-    lv_obj_align(img, LV_ALIGN_CENTER, 0, 0);
-#endif
-
-#if 0
-	const char * data = "https://ehtc.sd12320.gov.cn:4431/trust?id=9f83e6ed584e4b39929b06db4f9d4b92";
-
-	/*Create a 50x50 QR code*/
-	lv_obj_t * qr = lv_qrcode_create(lv_scr_act(), 37, lv_color_black(), lv_color_white());
-
-	/*Set data*/
-	lv_qrcode_update(qr, data, strlen(data));
-
-    lv_obj_align(qr, LV_ALIGN_CENTER, 0, 0);
-#endif
-	// lv_style_t style_lbl;
-	// lv_style_init(&style_lbl);
-	// lv_style_set_text_color(&style_lbl, lv_color_black());
-	// lv_obj_add_style(label, &style_lbl, LV_STATE_DEFAULT);
-
-
-    /*Create a LED and switch it OFF*/
-    // lv_obj_t * led1  = lv_led_create(lv_scr_act());
-    // lv_obj_align(led1, LV_ALIGN_CENTER, 0, 0);
-	// lv_led_set_brightness(led1, 150);
-	// lv_led_set_color(led1, lv_palette_main(LV_PALETTE_RED));
-    // lv_led_off(led1);
-
-    /*Copy the previous LED and set a brightness*/
-    // lv_obj_t * led2  = lv_led_create(lv_scr_act());
-    // lv_obj_align(led2, LV_ALIGN_CENTER, 0, 0);
-    // lv_led_set_brightness(led2, 150);
-    // lv_led_set_color(led2, lv_palette_main(LV_PALETTE_RED));
-
-    // /*Copy the previous LED and switch it ON*/
-    // lv_obj_t * led3  = lv_led_create(lv_scr_act());
-    // lv_obj_align(led3, LV_ALIGN_CENTER, 80, 0);
-    // lv_led_on(led3);
 
 	static uint32_t inc= 0, on = 0;
 
@@ -184,20 +90,13 @@ void lv_task(void *pvParameters)
 		if (inc++ == 200)
 		{
 			inc = 0;
-			// ESP_LOGI(TAG, "LV task...");
 			// ESP_LOGI(TAG, "key values = %d", keyValues);
 			if (on == 0)
 			{
-				// lv_led_off(led1);
-				// lv_obj_add_state(ui_Screen1_Switch1, LV_STATE_CHECKED);
-				// lv_bar_set_value(ui_Screen1_Bar1, 100, LV_ANIM_ON);
 				on = 1;
 			}
 			else
 			{
-				// lv_led_on(led1);
-				// lv_obj_clear_state(ui_Screen1_Switch1, LV_STATE_CHECKED);
-				// lv_bar_set_value(ui_Screen1_Bar1, 10, LV_ANIM_ON);
 				on = 0;
 			}
 		}
