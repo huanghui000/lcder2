@@ -111,7 +111,7 @@ void ui_Screen1_screen_init(void)
 
     ui_LabelNowWindSpeed = lv_label_create(ui_WeatherPageNow);
     ui_style_page_label(ui_LabelNowWindSpeed, 152, 4, 84, LV_TEXT_ALIGN_LEFT);
-    lv_label_set_text(ui_LabelNowWindSpeed, "风速: -- km/h");
+    lv_label_set_text(ui_LabelNowWindSpeed, "风速: --级");
 
     ui_WeatherPageToday = lv_obj_create(ui_WeatherContent);
     ui_clear_container_style(ui_WeatherPageToday);
@@ -145,7 +145,7 @@ void ui_Screen1_screen_init(void)
 
     ui_LabelTodayWindSpeed = lv_label_create(ui_WeatherPageToday);
     ui_style_page_label(ui_LabelTodayWindSpeed, 152, 4, 84, LV_TEXT_ALIGN_LEFT);
-    lv_label_set_text(ui_LabelTodayWindSpeed, "风速: -- km/h");
+    lv_label_set_text(ui_LabelTodayWindSpeed, "风速: --级");
 
     ui_WeatherPageTomorrow = lv_obj_create(ui_WeatherContent);
     ui_clear_container_style(ui_WeatherPageTomorrow);
@@ -179,5 +179,5 @@ void ui_Screen1_screen_init(void)
 
     ui_LabelTomorrowWindSpeed = lv_label_create(ui_WeatherPageTomorrow);
     ui_style_page_label(ui_LabelTomorrowWindSpeed, 152, 4, 84, LV_TEXT_ALIGN_LEFT);
-    lv_label_set_text(ui_LabelTomorrowWindSpeed, "风速: -- km/h");
+    lv_label_set_text(ui_LabelTomorrowWindSpeed, "风速: --级");
 }
