@@ -25,7 +25,7 @@ extern char is_wifi_connected;
 
 #define WEB_SERVER              "api.seniverse.com"
 #define WEB_PORT                "80"
-#define SENIVERSE_API_KEY       "smtq3n0ixdggurox"
+#define SENIVERSE_API_KEY       "SkEFlh-N-DtiJTcnf"
 #define WEATHER_CFG_NAMESPACE   "weather_cfg"
 #define DEFAULT_LOCATION_ID     "laishan"
 #define DEFAULT_LOCATION_NAME   "Laishan"
@@ -106,6 +106,52 @@ static const char *lookupWeatherCode(const char *code_day)
     }
 
     return &weatherIconTbl[i][1];
+}
+
+static const char *json_string_or_placeholder(cJSON *item)
+{
+    if (item != NULL && cJSON_IsString(item) && item->valuestring != NULL && item->valuestring[0] != 0)
+    {
+        return item->valuestring;
+    }
+
+    return "--";
+}
+
+static const char *wind_speed_to_level(cJSON *wind_speed)
+{
+    static char level_buf[8];
+    static const float level_thresholds_kmh[] = {
+        1.0f, 6.0f, 12.0f, 20.0f, 29.0f, 39.0f, 50.0f,
+        62.0f, 75.0f, 89.0f, 103.0f, 118.0f
+    };
+    char *endptr;
+    float speed_kmh;
+    int level = 12;
+    size_t i;
+
+    if (wind_speed == NULL || !cJSON_IsString(wind_speed) || wind_speed->valuestring == NULL || wind_speed->valuestring[0] == 0)
+    {
+        return "--";
+    }
+
+    speed_kmh = strtof(wind_speed->valuestring, &endptr);
+    if (endptr == wind_speed->valuestring)
+    {
+        return "--";
+    }
+
+    for (i = 0; i < (sizeof(level_thresholds_kmh) / sizeof(level_thresholds_kmh[0])); ++i)
+    {
+        if (speed_kmh < level_thresholds_kmh[i])
+        {
+            level = (int)i;
+            break;
+        }
+    }
+
+    snprintf(level_buf, sizeof(level_buf), "%d级", level);
+    return level_buf;
 }
 
 static esp_err_t load_weather_cfg_from_nvs(void)
@@ -225,10 +271,6 @@ int http_get_response(char *buf, int buf_len, const char *server, const char *re
     int err;
     int idx = 0;
 
-    ESP_LOGI(TAG, "http_get_response heap=%u stack_hwm=%u",
-        (unsigned)esp_get_free_heap_size(),
-        (unsigned)uxTaskGetStackHighWaterMark(NULL));
-
     err = getaddrinfo(server, WEB_PORT, &hints, &res);
     if (err != 0 || res == NULL)
     {
@@ -309,11 +351,6 @@ static esp_err_t seniverse_request_json(const char *path, char *recv_buf, size_t
         "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n",
         path, WEB_SERVER);
 
-    ESP_LOGI(TAG, "request path=%s heap=%u stack_hwm=%u",
-        path,
-        (unsigned)esp_get_free_heap_size(),
-        (unsigned)uxTaskGetStackHighWaterMark(NULL));
-
     err = http_get_response(recv_buf, (int)recv_buf_len, WEB_SERVER, req);
     free(req);
     if (err != 0)
@@ -388,26 +425,59 @@ static esp_err_t seniverse_search_location(const char *query, char *location_id,
     {
         if (path_item && cJSON_IsString(path_item))
         {
-            snprintf(location_detail, location_detail_len,
-                "匹配路径：%s\n城市 ID：%s",
+            snprintf(location_detail, location_detail_len, "path: %s\nid: %s",
                 path_item->valuestring, id->valuestring);
         }
         else if (country && cJSON_IsString(country))
         {
-            snprintf(location_detail, location_detail_len,
-                "国家/地区：%s\n城市 ID：%s",
+            snprintf(location_detail, location_detail_len, "country: %s\nid: %s",
                 country->valuestring, id->valuestring);
         }
         else
         {
-            snprintf(location_detail, location_detail_len,
-                "城市 ID：%s",
-                id->valuestring);
+            snprintf(location_detail, location_detail_len, "id: %s", id->valuestring);
         }
     }
 
     cJSON_Delete(root);
     return ESP_OK;
+}
+
+static void update_addr_if_present(cJSON *location)
+{
+    cJSON *name = location ? cJSON_GetObjectItem(location, "name") : NULL;
+
+    if (name != NULL && cJSON_IsString(name))
+    {
+        lv_label_set_text(ui_LabelAddr, name->valuestring);
+    }
+}
+
+static void update_daily_page(lv_obj_t *label_text, lv_obj_t *label_temp, lv_obj_t *label_wind_dir,
+    lv_obj_t *label_wind_speed, lv_obj_t *label_icon, cJSON *day)
+{
+    cJSON *text_day = cJSON_GetObjectItem(day, "text_day");
+    cJSON *low = cJSON_GetObjectItem(day, "low");
+    cJSON *high = cJSON_GetObjectItem(day, "high");
+    cJSON *code_day = cJSON_GetObjectItem(day, "code_day");
+    cJSON *wind_direction = cJSON_GetObjectItem(day, "wind_direction");
+    cJSON *wind_speed = cJSON_GetObjectItem(day, "wind_speed");
+
+    lv_label_set_text(label_text, json_string_or_placeholder(text_day));
+    if (low != NULL && high != NULL && cJSON_IsString(low) && cJSON_IsString(high))
+    {
+        lv_label_set_text_fmt(label_temp, "%s/%s\xE2\x84\x83", low->valuestring, high->valuestring);
+    }
+    else
+    {
+        lv_label_set_text(label_temp, "--/--");
+    }
+    lv_label_set_text_fmt(label_wind_dir, "风向: %s", json_string_or_placeholder(wind_direction));
+    lv_label_set_text_fmt(label_wind_speed, "风速: %s", wind_speed_to_level(wind_speed));
+    if (code_day != NULL && cJSON_IsString(code_day))
+    {
+        lv_label_set_text(label_icon, lookupWeatherCode(code_day->valuestring));
+    }
 }
 
 static esp_err_t fetch_daily_weather(const char *location_id, char *recv_buf, size_t recv_buf_len)
@@ -416,12 +486,14 @@ static esp_err_t fetch_daily_weather(const char *location_id, char *recv_buf, si
     cJSON *root = NULL;
     cJSON *results;
     cJSON *result0;
+    cJSON *location;
     cJSON *daily;
-    cJSON *day;
+    cJSON *day0;
+    cJSON *day1;
     esp_err_t err;
 
     snprintf(path, sizeof(path),
-        "/v3/weather/daily.json?key=%s&location=%s&language=zh-Hans&unit=c&start=1&days=1",
+        "/v3/weather/daily.json?key=%s&location=%s&language=zh-Hans&unit=c&start=0&days=2",
         SENIVERSE_API_KEY, location_id);
 
     err = seniverse_request_json(path, recv_buf, recv_buf_len, &root);
@@ -433,26 +505,24 @@ static esp_err_t fetch_daily_weather(const char *location_id, char *recv_buf, si
     results = cJSON_GetObjectItem(root, "results");
     result0 = (results && cJSON_IsArray(results) && cJSON_GetArraySize(results) > 0) ?
         cJSON_GetArrayItem(results, 0) : NULL;
+    location = result0 ? cJSON_GetObjectItem(result0, "location") : NULL;
     daily = result0 ? cJSON_GetObjectItem(result0, "daily") : NULL;
-    day = (daily && cJSON_IsArray(daily) && cJSON_GetArraySize(daily) > 0) ?
-        cJSON_GetArrayItem(daily, 0) : NULL;
+    day0 = (daily && cJSON_IsArray(daily) && cJSON_GetArraySize(daily) > 0) ? cJSON_GetArrayItem(daily, 0) : NULL;
+    day1 = (daily && cJSON_IsArray(daily) && cJSON_GetArraySize(daily) > 1) ? cJSON_GetArrayItem(daily, 1) : NULL;
 
-    if (day != NULL)
+    xSemaphoreTake(xLvglMutex, portMAX_DELAY);
+    update_addr_if_present(location);
+    if (day0 != NULL)
     {
-        cJSON *text_day = cJSON_GetObjectItem(day, "text_day");
-        cJSON *low = cJSON_GetObjectItem(day, "low");
-        cJSON *high = cJSON_GetObjectItem(day, "high");
-        cJSON *code_day = cJSON_GetObjectItem(day, "code_day");
-
-        if (text_day && low && high && code_day)
-        {
-            xSemaphoreTake(xLvglMutex, portMAX_DELAY);
-            lv_label_set_text(ui_LabelWeather1, text_day->valuestring);
-            lv_label_set_text_fmt(ui_LabelTemp1, "%s/%s℃", low->valuestring, high->valuestring);
-            lv_label_set_text(ui_LabelWeatherIcon1, lookupWeatherCode(code_day->valuestring));
-            xSemaphoreGive(xLvglMutex);
-        }
+        update_daily_page(ui_LabelTodayText, ui_LabelTodayTemp, ui_LabelTodayWindDir,
+            ui_LabelTodayWindSpeed, ui_LabelTodayIcon, day0);
     }
+    if (day1 != NULL)
+    {
+        update_daily_page(ui_LabelTomorrowText, ui_LabelTomorrowTemp, ui_LabelTomorrowWindDir,
+            ui_LabelTomorrowWindSpeed, ui_LabelTomorrowIcon, day1);
+    }
+    xSemaphoreGive(xLvglMutex);
 
     cJSON_Delete(root);
     return ESP_OK;
@@ -486,20 +556,30 @@ static esp_err_t fetch_now_weather(const char *location_id, char *recv_buf, size
 
     if (location != NULL && now != NULL)
     {
-        cJSON *name = cJSON_GetObjectItem(location, "name");
         cJSON *text = cJSON_GetObjectItem(now, "text");
         cJSON *code = cJSON_GetObjectItem(now, "code");
         cJSON *temperature = cJSON_GetObjectItem(now, "temperature");
+        cJSON *wind_speed = cJSON_GetObjectItem(now, "wind_speed");
+        cJSON *wind_direction = cJSON_GetObjectItem(now, "wind_direction");
 
-        if (name && text && code && temperature)
+        xSemaphoreTake(xLvglMutex, portMAX_DELAY);
+        update_addr_if_present(location);
+        lv_label_set_text(ui_LabelNowText, json_string_or_placeholder(text));
+        if (temperature != NULL && cJSON_IsString(temperature))
         {
-            xSemaphoreTake(xLvglMutex, portMAX_DELAY);
-            lv_label_set_text(ui_LabelAddr, name->valuestring);
-            lv_label_set_text(ui_LabelWeather, text->valuestring);
-            lv_label_set_text(ui_LabelWeatherIcon, lookupWeatherCode(code->valuestring));
-            lv_label_set_text_fmt(ui_LabelTemp, "%s℃", temperature->valuestring);
-            xSemaphoreGive(xLvglMutex);
+            lv_label_set_text_fmt(ui_LabelNowTemp, "%s\xE2\x84\x83", temperature->valuestring);
         }
+        else
+        {
+            lv_label_set_text(ui_LabelNowTemp, "--");
+        }
+        lv_label_set_text_fmt(ui_LabelNowWindDir, "风向: %s", json_string_or_placeholder(wind_direction));
+        lv_label_set_text_fmt(ui_LabelNowWindSpeed, "风速: %s", wind_speed_to_level(wind_speed));
+        if (code != NULL && cJSON_IsString(code))
+        {
+            lv_label_set_text(ui_LabelNowIcon, lookupWeatherCode(code->valuestring));
+        }
+        xSemaphoreGive(xLvglMutex);
     }
 
     cJSON_Delete(root);
@@ -636,10 +716,7 @@ void http_get_task(void *pvParameters)
         copy_location_locked(location_id, sizeof(location_id), location_name, sizeof(location_name));
         xSemaphoreGive(s_weather_cfg_mutex);
 
-        ESP_LOGI(TAG, "Getting weather for %s (%s), heap=%u stack_hwm=%u",
-            location_name, location_id,
-            (unsigned)esp_get_free_heap_size(),
-            (unsigned)uxTaskGetStackHighWaterMark(NULL));
+        ESP_LOGI(TAG, "Getting weather for %s (%s)", location_name, location_id);
 
         fetch_daily_weather(location_id, recv_buf, sizeof(recv_buf));
         fetch_now_weather(location_id, recv_buf, sizeof(recv_buf));

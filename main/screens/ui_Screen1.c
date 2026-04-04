@@ -5,16 +5,38 @@
 
 #include "../ui.h"
 
+static void ui_clear_container_style(lv_obj_t *obj)
+{
+    lv_obj_remove_style_all(obj);
+    lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_opa(obj, LV_OPA_TRANSP, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_all(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+}
+
+static void ui_style_page_label(lv_obj_t *label, lv_coord_t w, lv_coord_t x, lv_coord_t y, lv_text_align_t align)
+{
+    lv_obj_set_width(label, w);
+    lv_obj_set_height(label, LV_SIZE_CONTENT);
+    lv_obj_set_pos(label, x, y);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
+    lv_obj_set_style_text_color(label, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_align(label, align, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(label, &ui_font_simliSmall, LV_PART_MAIN | LV_STATE_DEFAULT);
+}
+
 void ui_Screen1_screen_init(void)
 {
     ui_Screen1 = lv_obj_create(NULL);
-    lv_obj_clear_flag(ui_Screen1, LV_OBJ_FLAG_SCROLLABLE);      /// Flags
+    lv_obj_clear_flag(ui_Screen1, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(ui_Screen1, lv_color_white(), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(ui_Screen1, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
 
     ui_LabelAddr = lv_label_create(ui_Screen1);
     lv_obj_set_width(ui_LabelAddr, lv_pct(35));
-    lv_obj_set_height(ui_LabelAddr, LV_SIZE_CONTENT);    /// 1
+    lv_obj_set_height(ui_LabelAddr, LV_SIZE_CONTENT);
     lv_obj_set_x(ui_LabelAddr, -50);
-    lv_obj_set_y(ui_LabelAddr, 13);
+    lv_obj_set_y(ui_LabelAddr, 8);
     lv_obj_set_align(ui_LabelAddr, LV_ALIGN_TOP_MID);
     lv_label_set_text(ui_LabelAddr, "莱山");
     lv_obj_set_style_text_color(ui_LabelAddr, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -22,69 +44,21 @@ void ui_Screen1_screen_init(void)
     lv_obj_set_style_text_align(ui_LabelAddr, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_font(ui_LabelAddr, &ui_font_simli, LV_PART_MAIN | LV_STATE_DEFAULT);
 
-    ui_LabelWeatherIcon = lv_label_create(ui_Screen1);
-    lv_obj_set_width(ui_LabelWeatherIcon, 50);
-    lv_obj_set_height(ui_LabelWeatherIcon, 50);
-    lv_obj_set_x(ui_LabelWeatherIcon, 12);
-    lv_obj_set_y(ui_LabelWeatherIcon, 18);
-    lv_obj_set_align(ui_LabelWeatherIcon, LV_ALIGN_LEFT_MID);
-    lv_label_set_text(ui_LabelWeatherIcon, "A");
-    lv_obj_set_style_text_color(ui_LabelWeatherIcon, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_opa(ui_LabelWeatherIcon, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_align(ui_LabelWeatherIcon, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui_LabelWeatherIcon, &ui_font_iconfontSmall, LV_PART_MAIN | LV_STATE_DEFAULT);
-
     ui_LabelDate = lv_label_create(ui_Screen1);
-    lv_obj_set_width(ui_LabelDate, lv_pct(61));
-    lv_obj_set_height(ui_LabelDate, LV_SIZE_CONTENT);    /// 1
+    lv_obj_set_width(ui_LabelDate, lv_pct(65));
+    lv_obj_set_height(ui_LabelDate, LV_SIZE_CONTENT);
     lv_obj_set_x(ui_LabelDate, 30);
     lv_obj_set_y(ui_LabelDate, -110);
     lv_obj_set_align(ui_LabelDate, LV_ALIGN_BOTTOM_MID);
-    lv_label_set_text(ui_LabelDate, "2025.4.17");
+    lv_label_set_text(ui_LabelDate, "2025.04.17");
     lv_obj_set_style_text_color(ui_LabelDate, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_opa(ui_LabelDate, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_align(ui_LabelDate, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_font(ui_LabelDate, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
 
-    ui_LabelTemp = lv_label_create(ui_Screen1);
-    lv_obj_set_width(ui_LabelTemp, lv_pct(32));
-    lv_obj_set_height(ui_LabelTemp, LV_SIZE_CONTENT);    /// 1
-    lv_obj_set_x(ui_LabelTemp, -43);
-    lv_obj_set_y(ui_LabelTemp, -3);
-    lv_obj_set_align(ui_LabelTemp, LV_ALIGN_BOTTOM_MID);
-    lv_label_set_text(ui_LabelTemp, "20℃");
-    lv_obj_set_style_text_color(ui_LabelTemp, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_opa(ui_LabelTemp, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_align(ui_LabelTemp, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui_LabelTemp, &ui_font_simliSmall, LV_PART_MAIN | LV_STATE_DEFAULT);
-
-    ui_LabelWeatherIcon1 = lv_label_create(ui_Screen1);
-    lv_obj_set_width(ui_LabelWeatherIcon1, 50);
-    lv_obj_set_height(ui_LabelWeatherIcon1, 50);
-    lv_obj_set_x(ui_LabelWeatherIcon1, 97);
-    lv_obj_set_y(ui_LabelWeatherIcon1, 20);
-    lv_obj_set_align(ui_LabelWeatherIcon1, LV_ALIGN_LEFT_MID);
-    lv_label_set_text(ui_LabelWeatherIcon1, "A");
-    lv_obj_set_style_text_color(ui_LabelWeatherIcon1, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_opa(ui_LabelWeatherIcon1, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_align(ui_LabelWeatherIcon1, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui_LabelWeatherIcon1, &ui_font_iconfontSmall, LV_PART_MAIN | LV_STATE_DEFAULT);
-
-    ui_LabelTemp1 = lv_label_create(ui_Screen1);
-    lv_obj_set_width(ui_LabelTemp1, lv_pct(55));
-    lv_obj_set_height(ui_LabelTemp1, LV_SIZE_CONTENT);    /// 1
-    lv_obj_set_x(ui_LabelTemp1, 33);
-    lv_obj_set_y(ui_LabelTemp1, -3);
-    lv_obj_set_align(ui_LabelTemp1, LV_ALIGN_BOTTOM_MID);
-    lv_label_set_text(ui_LabelTemp1, "10/20℃");
-    lv_obj_set_style_text_color(ui_LabelTemp1, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_opa(ui_LabelTemp1, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_align(ui_LabelTemp1, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui_LabelTemp1, &ui_font_simliSmall, LV_PART_MAIN | LV_STATE_DEFAULT);
-
     ui_LabelTime = lv_label_create(ui_Screen1);
-    lv_obj_set_width(ui_LabelTime, lv_pct(61));
-    lv_obj_set_height(ui_LabelTime, LV_SIZE_CONTENT);    /// 1
+    lv_obj_set_width(ui_LabelTime, lv_pct(65));
+    lv_obj_set_height(ui_LabelTime, LV_SIZE_CONTENT);
     lv_obj_set_x(ui_LabelTime, 30);
     lv_obj_set_y(ui_LabelTime, -135);
     lv_obj_set_align(ui_LabelTime, LV_ALIGN_BOTTOM_MID);
@@ -94,50 +68,116 @@ void ui_Screen1_screen_init(void)
     lv_obj_set_style_text_align(ui_LabelTime, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_font(ui_LabelTime, &ui_font_digifaw, LV_PART_MAIN | LV_STATE_DEFAULT);
 
-    ui_LabelWeather = lv_label_create(ui_Screen1);
-    lv_obj_set_width(ui_LabelWeather, lv_pct(39));
-    lv_obj_set_height(ui_LabelWeather, LV_SIZE_CONTENT);    /// 1
-    lv_obj_set_x(ui_LabelWeather, -44);
-    lv_obj_set_y(ui_LabelWeather, 123);
-    lv_obj_set_align(ui_LabelWeather, LV_ALIGN_TOP_MID);
-    lv_label_set_text(ui_LabelWeather, "晴");
-    lv_obj_set_style_text_color(ui_LabelWeather, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_opa(ui_LabelWeather, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_align(ui_LabelWeather, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui_LabelWeather, &ui_font_simliSmall, LV_PART_MAIN | LV_STATE_DEFAULT);
+    ui_WeatherViewport = lv_obj_create(ui_Screen1);
+    ui_clear_container_style(ui_WeatherViewport);
+    lv_obj_set_size(ui_WeatherViewport, 160, 110);
+    lv_obj_set_pos(ui_WeatherViewport, 0, 46);
+    lv_obj_set_style_clip_corner(ui_WeatherViewport, true, LV_PART_MAIN | LV_STATE_DEFAULT);
 
-    ui_LabelWeather1 = lv_label_create(ui_Screen1);
-    lv_obj_set_width(ui_LabelWeather1, lv_pct(29));
-    lv_obj_set_height(ui_LabelWeather1, LV_SIZE_CONTENT);    /// 1
-    lv_obj_set_x(ui_LabelWeather1, 41);
-    lv_obj_set_y(ui_LabelWeather1, 123);
-    lv_obj_set_align(ui_LabelWeather1, LV_ALIGN_TOP_MID);
-    lv_label_set_text(ui_LabelWeather1, "晴");
-    lv_obj_set_style_text_color(ui_LabelWeather1, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_opa(ui_LabelWeather1, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_align(ui_LabelWeather1, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui_LabelWeather1, &ui_font_simliSmall, LV_PART_MAIN | LV_STATE_DEFAULT);
+    ui_WeatherContent = lv_obj_create(ui_WeatherViewport);
+    ui_clear_container_style(ui_WeatherContent);
+    lv_obj_set_size(ui_WeatherContent, 480, 110);
+    lv_obj_set_pos(ui_WeatherContent, 0, 0);
 
-    ui_Label2 = lv_label_create(ui_Screen1);
-    lv_obj_set_width(ui_Label2, LV_SIZE_CONTENT);   /// 1
-    lv_obj_set_height(ui_Label2, LV_SIZE_CONTENT);    /// 1
-    lv_obj_set_x(ui_Label2, -44);
-    lv_obj_set_y(ui_Label2, -20);
-    lv_obj_set_align(ui_Label2, LV_ALIGN_CENTER);
-    lv_label_set_text(ui_Label2, "今日");
-    lv_obj_set_style_text_color(ui_Label2, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_opa(ui_Label2, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui_Label2, &ui_font_simliSmall, LV_PART_MAIN | LV_STATE_DEFAULT);
+    ui_WeatherPageNow = lv_obj_create(ui_WeatherContent);
+    ui_clear_container_style(ui_WeatherPageNow);
+    lv_obj_set_size(ui_WeatherPageNow, 160, 110);
+    lv_obj_set_pos(ui_WeatherPageNow, 0, 0);
 
-    ui_Label1 = lv_label_create(ui_Screen1);
-    lv_obj_set_width(ui_Label1, LV_SIZE_CONTENT);   /// 1
-    lv_obj_set_height(ui_Label1, LV_SIZE_CONTENT);    /// 1
-    lv_obj_set_x(ui_Label1, 42);
-    lv_obj_set_y(ui_Label1, -20);
-    lv_obj_set_align(ui_Label1, LV_ALIGN_CENTER);
-    lv_label_set_text(ui_Label1, "明日");
-    lv_obj_set_style_text_color(ui_Label1, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_opa(ui_Label1, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_text_font(ui_Label1, &ui_font_simliSmall, LV_PART_MAIN | LV_STATE_DEFAULT);
+    ui_LabelNowTitle = lv_label_create(ui_WeatherPageNow);
+    ui_style_page_label(ui_LabelNowTitle, 160, 0, 0, LV_TEXT_ALIGN_CENTER);
+    lv_label_set_text(ui_LabelNowTitle, "当前天气");
 
+    ui_LabelNowIcon = lv_label_create(ui_WeatherPageNow);
+    lv_obj_set_width(ui_LabelNowIcon, 40);
+    lv_obj_set_height(ui_LabelNowIcon, 40);
+    lv_obj_set_pos(ui_LabelNowIcon, 8, 18);
+    lv_label_set_text(ui_LabelNowIcon, "A");
+    lv_obj_set_style_text_color(ui_LabelNowIcon, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_align(ui_LabelNowIcon, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui_LabelNowIcon, &ui_font_iconfontSmall, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    ui_LabelNowText = lv_label_create(ui_WeatherPageNow);
+    ui_style_page_label(ui_LabelNowText, 100, 48, 18, LV_TEXT_ALIGN_CENTER);
+    lv_label_set_text(ui_LabelNowText, "晴");
+
+    ui_LabelNowTemp = lv_label_create(ui_WeatherPageNow);
+    ui_style_page_label(ui_LabelNowTemp, 100, 48, 38, LV_TEXT_ALIGN_CENTER);
+    lv_label_set_text(ui_LabelNowTemp, "20℃");
+
+    ui_LabelNowWindDir = lv_label_create(ui_WeatherPageNow);
+    ui_style_page_label(ui_LabelNowWindDir, 152, 4, 64, LV_TEXT_ALIGN_LEFT);
+    lv_label_set_text(ui_LabelNowWindDir, "风向: --");
+
+    ui_LabelNowWindSpeed = lv_label_create(ui_WeatherPageNow);
+    ui_style_page_label(ui_LabelNowWindSpeed, 152, 4, 84, LV_TEXT_ALIGN_LEFT);
+    lv_label_set_text(ui_LabelNowWindSpeed, "风速: -- km/h");
+
+    ui_WeatherPageToday = lv_obj_create(ui_WeatherContent);
+    ui_clear_container_style(ui_WeatherPageToday);
+    lv_obj_set_size(ui_WeatherPageToday, 160, 110);
+    lv_obj_set_pos(ui_WeatherPageToday, 160, 0);
+
+    ui_LabelTodayTitle = lv_label_create(ui_WeatherPageToday);
+    ui_style_page_label(ui_LabelTodayTitle, 160, 0, 0, LV_TEXT_ALIGN_CENTER);
+    lv_label_set_text(ui_LabelTodayTitle, "今日天气");
+
+    ui_LabelTodayIcon = lv_label_create(ui_WeatherPageToday);
+    lv_obj_set_width(ui_LabelTodayIcon, 40);
+    lv_obj_set_height(ui_LabelTodayIcon, 40);
+    lv_obj_set_pos(ui_LabelTodayIcon, 8, 18);
+    lv_label_set_text(ui_LabelTodayIcon, "A");
+    lv_obj_set_style_text_color(ui_LabelTodayIcon, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_align(ui_LabelTodayIcon, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui_LabelTodayIcon, &ui_font_iconfontSmall, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    ui_LabelTodayText = lv_label_create(ui_WeatherPageToday);
+    ui_style_page_label(ui_LabelTodayText, 100, 48, 18, LV_TEXT_ALIGN_CENTER);
+    lv_label_set_text(ui_LabelTodayText, "晴");
+
+    ui_LabelTodayTemp = lv_label_create(ui_WeatherPageToday);
+    ui_style_page_label(ui_LabelTodayTemp, 100, 48, 38, LV_TEXT_ALIGN_CENTER);
+    lv_label_set_text(ui_LabelTodayTemp, "10/20℃");
+
+    ui_LabelTodayWindDir = lv_label_create(ui_WeatherPageToday);
+    ui_style_page_label(ui_LabelTodayWindDir, 152, 4, 64, LV_TEXT_ALIGN_LEFT);
+    lv_label_set_text(ui_LabelTodayWindDir, "风向: --");
+
+    ui_LabelTodayWindSpeed = lv_label_create(ui_WeatherPageToday);
+    ui_style_page_label(ui_LabelTodayWindSpeed, 152, 4, 84, LV_TEXT_ALIGN_LEFT);
+    lv_label_set_text(ui_LabelTodayWindSpeed, "风速: -- km/h");
+
+    ui_WeatherPageTomorrow = lv_obj_create(ui_WeatherContent);
+    ui_clear_container_style(ui_WeatherPageTomorrow);
+    lv_obj_set_size(ui_WeatherPageTomorrow, 160, 110);
+    lv_obj_set_pos(ui_WeatherPageTomorrow, 320, 0);
+
+    ui_LabelTomorrowTitle = lv_label_create(ui_WeatherPageTomorrow);
+    ui_style_page_label(ui_LabelTomorrowTitle, 160, 0, 0, LV_TEXT_ALIGN_CENTER);
+    lv_label_set_text(ui_LabelTomorrowTitle, "明天天气");
+
+    ui_LabelTomorrowIcon = lv_label_create(ui_WeatherPageTomorrow);
+    lv_obj_set_width(ui_LabelTomorrowIcon, 40);
+    lv_obj_set_height(ui_LabelTomorrowIcon, 40);
+    lv_obj_set_pos(ui_LabelTomorrowIcon, 8, 18);
+    lv_label_set_text(ui_LabelTomorrowIcon, "A");
+    lv_obj_set_style_text_color(ui_LabelTomorrowIcon, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_align(ui_LabelTomorrowIcon, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(ui_LabelTomorrowIcon, &ui_font_iconfontSmall, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    ui_LabelTomorrowText = lv_label_create(ui_WeatherPageTomorrow);
+    ui_style_page_label(ui_LabelTomorrowText, 100, 48, 18, LV_TEXT_ALIGN_CENTER);
+    lv_label_set_text(ui_LabelTomorrowText, "晴");
+
+    ui_LabelTomorrowTemp = lv_label_create(ui_WeatherPageTomorrow);
+    ui_style_page_label(ui_LabelTomorrowTemp, 100, 48, 38, LV_TEXT_ALIGN_CENTER);
+    lv_label_set_text(ui_LabelTomorrowTemp, "10/20℃");
+
+    ui_LabelTomorrowWindDir = lv_label_create(ui_WeatherPageTomorrow);
+    ui_style_page_label(ui_LabelTomorrowWindDir, 152, 4, 64, LV_TEXT_ALIGN_LEFT);
+    lv_label_set_text(ui_LabelTomorrowWindDir, "风向: --");
+
+    ui_LabelTomorrowWindSpeed = lv_label_create(ui_WeatherPageTomorrow);
+    ui_style_page_label(ui_LabelTomorrowWindSpeed, 152, 4, 84, LV_TEXT_ALIGN_LEFT);
+    lv_label_set_text(ui_LabelTomorrowWindSpeed, "风速: -- km/h");
 }

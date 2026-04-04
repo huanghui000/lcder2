@@ -48,6 +48,8 @@
 #define APP_KEY_LEFT    (1U << 1)
 #define APP_KEY_RIGHT   (1U << 0)
 #define QR_SCREEN_TIMEOUT_MS 10000
+#define WEATHER_PAGE_INTERVAL_MS 10000
+#define WEATHER_PAGE_ANIM_MS 500
 
 static char ssid[33] = WIFI_SSID;
 static char passwd[65] = WIFI_PASSWD;
@@ -65,8 +67,11 @@ static lv_obj_t *s_qr_link_label;
 static uint8_t s_keys_filtered;
 static volatile char s_force_weather_screen;
 static TickType_t s_qr_deadline;
+static TickType_t s_weather_page_deadline;
+static uint8_t s_weather_page_index;
 
 static uint32_t app_key_to_lvgl(uint8_t key_mask);
+static void app_set_weather_page_locked(uint8_t page_index, char animated);
 
 static void app_keypad_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
 {
@@ -124,8 +129,10 @@ static void app_update_qr_screen(void)
 
 static void app_show_weather_screen_locked(void)
 {
+    app_set_weather_page_locked(s_weather_page_index, 0);
     lv_scr_load(ui_Screen1);
     s_qr_deadline = 0;
+    s_weather_page_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(WEATHER_PAGE_INTERVAL_MS);
 }
 
 static void app_show_qr_screen_locked(void)
@@ -138,6 +145,36 @@ static void app_show_qr_screen_locked(void)
 void app_request_weather_screen(void)
 {
     s_force_weather_screen = 1;
+}
+
+static void app_set_weather_page_x(void *obj, int32_t x)
+{
+    lv_obj_set_x((lv_obj_t *)obj, x);
+}
+
+static void app_set_weather_page_locked(uint8_t page_index, char animated)
+{
+    int32_t target_x;
+
+    page_index = (uint8_t)(page_index % 3);
+    target_x = -(int32_t)(page_index * 160);
+    s_weather_page_index = page_index;
+
+    lv_anim_del(ui_WeatherContent, app_set_weather_page_x);
+    if (!animated)
+    {
+        lv_obj_set_x(ui_WeatherContent, target_x);
+        return;
+    }
+
+    lv_anim_t anim;
+    lv_anim_init(&anim);
+    lv_anim_set_var(&anim, ui_WeatherContent);
+    lv_anim_set_exec_cb(&anim, app_set_weather_page_x);
+    lv_anim_set_values(&anim, lv_obj_get_x(ui_WeatherContent), target_x);
+    lv_anim_set_time(&anim, WEATHER_PAGE_ANIM_MS);
+    lv_anim_set_path_cb(&anim, lv_anim_path_ease_in_out);
+    lv_anim_start(&anim);
 }
 
 static void app_init_qr_screen(void)
@@ -167,7 +204,7 @@ static void app_init_qr_screen(void)
     lv_obj_set_style_text_align(s_qr_link_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(s_qr_link_label, lv_color_black(), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_font(s_qr_link_label, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_align_to(s_qr_link_label, s_qr_code, LV_ALIGN_OUT_BOTTOM_MID, 0, 8);
+    lv_obj_align_to(s_qr_link_label, s_qr_code, LV_ALIGN_OUT_BOTTOM_MID, 0, 0);
     lv_label_set_text(s_qr_link_label, "http://0.0.0.0/");
 }
 
@@ -227,6 +264,11 @@ void lv_task(void *pvParameters)
         {
             s_force_weather_screen = 0;
             app_show_weather_screen_locked();
+        }
+        else if (lv_scr_act() == ui_Screen1 && s_weather_page_deadline != 0 && now >= s_weather_page_deadline)
+        {
+            app_set_weather_page_locked((uint8_t)(s_weather_page_index + 1), 1);
+            s_weather_page_deadline = now + pdMS_TO_TICKS(WEATHER_PAGE_INTERVAL_MS);
         }
         else if (lv_scr_act() == s_qr_screen && s_qr_deadline != 0 && now >= s_qr_deadline)
         {

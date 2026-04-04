@@ -15,28 +15,37 @@ extern "C" {
 #include "ui_helpers.h"
 #include "ui_events.h"
 
-
-// SCREEN: ui_Screen1
 void ui_Screen1_screen_init(void);
 extern lv_obj_t * ui_Screen1;
 extern lv_obj_t * ui_LabelAddr;
-extern lv_obj_t * ui_LabelWeatherIcon;
 extern lv_obj_t * ui_LabelDate;
-extern lv_obj_t * ui_LabelTemp;
-extern lv_obj_t * ui_LabelWeatherIcon1;
-extern lv_obj_t * ui_LabelTemp1;
 extern lv_obj_t * ui_LabelTime;
-extern lv_obj_t * ui_LabelWeather;
-extern lv_obj_t * ui_LabelWeather1;
-extern lv_obj_t * ui_Label2;
-extern lv_obj_t * ui_Label1;
-// CUSTOM VARIABLES
-
-// EVENTS
+extern lv_obj_t * ui_WeatherViewport;
+extern lv_obj_t * ui_WeatherContent;
+extern lv_obj_t * ui_WeatherPageNow;
+extern lv_obj_t * ui_WeatherPageToday;
+extern lv_obj_t * ui_WeatherPageTomorrow;
+extern lv_obj_t * ui_LabelNowTitle;
+extern lv_obj_t * ui_LabelNowIcon;
+extern lv_obj_t * ui_LabelNowText;
+extern lv_obj_t * ui_LabelNowTemp;
+extern lv_obj_t * ui_LabelNowWindDir;
+extern lv_obj_t * ui_LabelNowWindSpeed;
+extern lv_obj_t * ui_LabelTodayTitle;
+extern lv_obj_t * ui_LabelTodayIcon;
+extern lv_obj_t * ui_LabelTodayText;
+extern lv_obj_t * ui_LabelTodayTemp;
+extern lv_obj_t * ui_LabelTodayWindDir;
+extern lv_obj_t * ui_LabelTodayWindSpeed;
+extern lv_obj_t * ui_LabelTomorrowTitle;
+extern lv_obj_t * ui_LabelTomorrowIcon;
+extern lv_obj_t * ui_LabelTomorrowText;
+extern lv_obj_t * ui_LabelTomorrowTemp;
+extern lv_obj_t * ui_LabelTomorrowWindDir;
+extern lv_obj_t * ui_LabelTomorrowWindSpeed;
 
 extern lv_obj_t * ui____initial_actions0;
 
-// FONTS
 LV_FONT_DECLARE(ui_font_digifaw);
 LV_FONT_DECLARE(ui_font_Font1);
 LV_FONT_DECLARE(ui_font_Font1small);
@@ -45,7 +54,6 @@ LV_FONT_DECLARE(ui_font_iconfontSmall);
 LV_FONT_DECLARE(ui_font_simli);
 LV_FONT_DECLARE(ui_font_simliSmall);
 
-// UI INIT
 void ui_init(void);
 
 #ifdef __cplusplus
