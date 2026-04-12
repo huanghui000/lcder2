@@ -52,7 +52,8 @@ LV_FONT_DECLARE(ui_font_Font1small);
 LV_FONT_DECLARE(ui_font_iconfont);
 LV_FONT_DECLARE(ui_font_iconfontSmall);
 LV_FONT_DECLARE(ui_font_simli);
-LV_FONT_DECLARE(ui_font_simliSmall);
+
+const lv_font_t * ui_font_get_simli_small(void);
 
 void ui_init(void);
 

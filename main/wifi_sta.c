@@ -156,6 +156,96 @@ static const char *sc_event_to_name(int32_t event_id)
     }
 }
 
+static const char *sc_type_to_name(smartconfig_type_t type)
+{
+    switch (type)
+    {
+    case SC_TYPE_ESPTOUCH:
+        return "ESPTOUCH";
+    case SC_TYPE_AIRKISS:
+        return "AIRKISS";
+    case SC_TYPE_ESPTOUCH_AIRKISS:
+        return "ESPTOUCH_AIRKISS";
+    case SC_TYPE_ESPTOUCH_V2:
+        return "ESPTOUCH_V2";
+    default:
+        return "UNKNOWN";
+    }
+}
+
+static const char *wifi_disconnect_reason_to_name(uint8_t reason)
+{
+    switch (reason)
+    {
+    case WIFI_REASON_UNSPECIFIED:
+        return "UNSPECIFIED";
+    case WIFI_REASON_AUTH_EXPIRE:
+        return "AUTH_EXPIRE";
+    case WIFI_REASON_AUTH_LEAVE:
+        return "AUTH_LEAVE";
+    case WIFI_REASON_ASSOC_EXPIRE:
+        return "ASSOC_EXPIRE";
+    case WIFI_REASON_ASSOC_TOOMANY:
+        return "ASSOC_TOOMANY";
+    case WIFI_REASON_NOT_AUTHED:
+        return "NOT_AUTHED";
+    case WIFI_REASON_NOT_ASSOCED:
+        return "NOT_ASSOCED";
+    case WIFI_REASON_ASSOC_LEAVE:
+        return "ASSOC_LEAVE";
+    case WIFI_REASON_ASSOC_NOT_AUTHED:
+        return "ASSOC_NOT_AUTHED";
+    case WIFI_REASON_DISASSOC_PWRCAP_BAD:
+        return "DISASSOC_PWRCAP_BAD";
+    case WIFI_REASON_DISASSOC_SUPCHAN_BAD:
+        return "DISASSOC_SUPCHAN_BAD";
+    case WIFI_REASON_IE_INVALID:
+        return "IE_INVALID";
+    case WIFI_REASON_MIC_FAILURE:
+        return "MIC_FAILURE";
+    case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
+        return "4WAY_HANDSHAKE_TIMEOUT";
+    case WIFI_REASON_GROUP_KEY_UPDATE_TIMEOUT:
+        return "GROUP_KEY_UPDATE_TIMEOUT";
+    case WIFI_REASON_IE_IN_4WAY_DIFFERS:
+        return "IE_IN_4WAY_DIFFERS";
+    case WIFI_REASON_GROUP_CIPHER_INVALID:
+        return "GROUP_CIPHER_INVALID";
+    case WIFI_REASON_PAIRWISE_CIPHER_INVALID:
+        return "PAIRWISE_CIPHER_INVALID";
+    case WIFI_REASON_AKMP_INVALID:
+        return "AKMP_INVALID";
+    case WIFI_REASON_UNSUPP_RSN_IE_VERSION:
+        return "UNSUPP_RSN_IE_VERSION";
+    case WIFI_REASON_INVALID_RSN_IE_CAP:
+        return "INVALID_RSN_IE_CAP";
+    case WIFI_REASON_802_1X_AUTH_FAILED:
+        return "802_1X_AUTH_FAILED";
+    case WIFI_REASON_CIPHER_SUITE_REJECTED:
+        return "CIPHER_SUITE_REJECTED";
+    case WIFI_REASON_INVALID_PMKID:
+        return "INVALID_PMKID";
+    case WIFI_REASON_BEACON_TIMEOUT:
+        return "BEACON_TIMEOUT";
+    case WIFI_REASON_NO_AP_FOUND:
+        return "NO_AP_FOUND";
+    case WIFI_REASON_AUTH_FAIL:
+        return "AUTH_FAIL";
+    case WIFI_REASON_ASSOC_FAIL:
+        return "ASSOC_FAIL";
+    case WIFI_REASON_HANDSHAKE_TIMEOUT:
+        return "HANDSHAKE_TIMEOUT";
+    case WIFI_REASON_CONNECTION_FAIL:
+        return "CONNECTION_FAIL";
+    case WIFI_REASON_AP_TSF_RESET:
+        return "AP_TSF_RESET";
+    case WIFI_REASON_BASIC_RATE_NOT_SUPPORT:
+        return "BASIC_RATE_NOT_SUPPORT";
+    default:
+        return "UNKNOWN";
+    }
+}
+
 static void stop_smartconfig_with_log(const char *reason, uint32_t session_id)
 {
     esp_err_t err;
@@ -180,17 +270,19 @@ static void smartconfig_example_task(void *parm)
     uint32_t session_id = 0;
     uint32_t connected_ticks = 0;
     char connected_seen = 0;
+    smartconfig_type_t sc_type = SC_TYPE_ESPTOUCH_AIRKISS;
 
-    ESP_ERROR_CHECK(esp_smartconfig_set_type(SC_TYPE_ESPTOUCH));
+    ESP_ERROR_CHECK(esp_smartconfig_set_type(sc_type));
     ESP_ERROR_CHECK(esp_esptouch_set_timeout(SMARTCONFIG_TIMEOUT_SEC));
 
     smartconfig_start_config_t cfg = SMARTCONFIG_START_CONFIG_DEFAULT();
-    cfg.enable_log = false;
+    cfg.enable_log = true;
     session_id = ++s_sc_session_id;
     xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_SMARTCONFIG_BIT);
 
-    ESP_LOGI(TAG, "smartconfig start, session=%lu, timeout=%us",
-        (unsigned long)session_id, SMARTCONFIG_TIMEOUT_SEC);
+    ESP_LOGI(TAG, "smartconfig start, session=%lu, version=%s, type=%s(%d), timeout=%us, lib_log=%d",
+        (unsigned long)session_id, esp_smartconfig_get_version(), sc_type_to_name(sc_type),
+        (int)sc_type, SMARTCONFIG_TIMEOUT_SEC, cfg.enable_log);
     startup_ui_show_status("SmartConfig", "Waiting phone to send WiFi info", 40);
     ESP_ERROR_CHECK(esp_smartconfig_start(&cfg));
     s_smartconfig_running = 1;
@@ -259,12 +351,14 @@ static void event_handler(void *arg, esp_event_base_t event_base, int32_t event_
     }
     else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED)
     {
+        wifi_event_sta_disconnected_t *event = (wifi_event_sta_disconnected_t *)event_data;
         s_sta_disconnect_count++;
         s_wifi_reconnect_retry++;
         is_wifi_connected = 0;
         xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
-        ESP_LOGW(TAG, "event: WIFI_EVENT_STA_DISCONNECTED, count=%lu, smartconfig_running=%d, got_credentials=%d",
-            (unsigned long)s_sta_disconnect_count, s_smartconfig_running, s_sc_got_credentials);
+        ESP_LOGW(TAG, "event: WIFI_EVENT_STA_DISCONNECTED, count=%lu, smartconfig_running=%d, got_credentials=%d, ssid=%.*s, reason=%u(%s)",
+            (unsigned long)s_sta_disconnect_count, s_smartconfig_running, s_sc_got_credentials,
+            event->ssid_len, event->ssid, event->reason, wifi_disconnect_reason_to_name(event->reason));
 
         if (s_manual_switch_running)
         {
@@ -318,10 +412,12 @@ static void event_handler(void *arg, esp_event_base_t event_base, int32_t event_
         ESP_LOGI(TAG, "event: SC_EVENT_%s", sc_event_to_name(event_id));
         if (event_id == SC_EVENT_SCAN_DONE)
         {
+            ESP_LOGI(TAG, "smartconfig scan finished, waiting for target channel frame");
             startup_ui_show_status("Scan WiFi", "Searching nearby AP", 52);
         }
         else if (event_id == SC_EVENT_FOUND_CHANNEL)
         {
+            ESP_LOGI(TAG, "smartconfig locked on target channel");
             startup_ui_show_status("Channel OK", "SmartConfig channel found", 66);
         }
         else if (event_id == SC_EVENT_GOT_SSID_PSWD)
@@ -338,13 +434,21 @@ static void event_handler(void *arg, esp_event_base_t event_base, int32_t event_
             memcpy(wifi_config.sta.password, evt->password, sizeof(wifi_config.sta.password));
             wifi_config.sta.bssid_set = evt->bssid_set;
 
+            ESP_LOGI(TAG, "smartconfig credentials received, type=%s(%d), bssid_set=%d, phone_ip=%u.%u.%u.%u",
+                sc_type_to_name(evt->type), (int)evt->type, evt->bssid_set,
+                evt->cellphone_ip[0], evt->cellphone_ip[1], evt->cellphone_ip[2], evt->cellphone_ip[3]);
+
             if (wifi_config.sta.bssid_set)
             {
                 memcpy(wifi_config.sta.bssid, evt->bssid, sizeof(wifi_config.sta.bssid));
+                ESP_LOGI(TAG, "smartconfig target bssid=%02x:%02x:%02x:%02x:%02x:%02x",
+                    evt->bssid[0], evt->bssid[1], evt->bssid[2],
+                    evt->bssid[3], evt->bssid[4], evt->bssid[5]);
             }
 
             memcpy(ssid, evt->ssid, sizeof(evt->ssid));
             memcpy(password, evt->password, sizeof(evt->password));
+            ESP_LOGI(TAG, "smartconfig target ssid=%s", ssid);
             if (evt->type == SC_TYPE_ESPTOUCH_V2)
             {
                 ESP_ERROR_CHECK(esp_smartconfig_get_rvd_data(rvd_data, sizeof(rvd_data)));

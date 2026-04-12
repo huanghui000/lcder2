@@ -9,6 +9,7 @@
 
 #include <stdio.h>
 #include <time.h>
+#include <dirent.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -18,6 +19,7 @@
 #include "esp_system.h"
 #include "esp_log.h"
 #include "esp_libc.h"
+#include "esp_spiffs.h"
 
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -50,6 +52,9 @@
 #define QR_SCREEN_TIMEOUT_MS 10000
 #define WEATHER_PAGE_INTERVAL_MS 10000
 #define WEATHER_PAGE_ANIM_MS 500
+#define WEATHER_REFRESH_START_DELAY_S 8U
+#define WEATHER_REFRESH_INTERVAL_S 300U
+#define SNTP_SYNC_INTERVAL_S 1800U
 
 static char ssid[33] = WIFI_SSID;
 static char passwd[65] = WIFI_PASSWD;
@@ -66,12 +71,16 @@ static lv_obj_t *s_qr_title_label;
 static lv_obj_t *s_qr_link_label;
 static uint8_t s_keys_filtered;
 static volatile char s_force_weather_screen;
+static volatile char s_request_portal_start;
+static volatile char s_sntp_task_running;
 static TickType_t s_qr_deadline;
 static TickType_t s_weather_page_deadline;
 static uint8_t s_weather_page_index;
 
 static uint32_t app_key_to_lvgl(uint8_t key_mask);
 static void app_set_weather_page_locked(uint8_t page_index, char animated);
+static void app_test_spiffs(void);
+static esp_err_t app_request_sntp_sync(void);
 
 static void app_keypad_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
 {
@@ -145,6 +154,11 @@ static void app_show_qr_screen_locked(void)
 void app_request_weather_screen(void)
 {
     s_force_weather_screen = 1;
+}
+
+void app_request_portal_start(void)
+{
+    s_request_portal_start = 1;
 }
 
 static void app_set_weather_page_x(void *obj, int32_t x)
@@ -256,6 +270,7 @@ void lv_task(void *pvParameters)
         }
         else if (key_press_edge != 0)
         {
+            app_request_portal_start();
             app_show_qr_screen_locked();
         }
 
@@ -286,6 +301,7 @@ void lv_task(void *pvParameters)
 static void initialize_sntp(void)
 {
     ESP_LOGI(TAG, "Initializing SNTP");
+    sntp_stop();
     sntp_setoperatingmode(SNTP_OPMODE_POLL);
     sntp_setservername(0, "ntp1.aliyun.com");
     sntp_setservername(1, "ntp2.aliyun.com");
@@ -293,22 +309,36 @@ static void initialize_sntp(void)
     sntp_init();
 }
 
-static void obtain_time(void)
+static void sync_time_once(void)
 {
     time_t now = 0;
     struct tm timeinfo = {0};
     int retry = 0;
-    const int retry_count = 10;
+    int retry_count = 2;
+
+    time(&now);
+    localtime_r(&now, &timeinfo);
+    if (timeinfo.tm_year < (2016 - 1900))
+    {
+        ESP_LOGI(TAG, "Time is not set yet. Connecting to WiFi and getting time over NTP.");
+        retry_count = 10;
+    }
 
     initialize_sntp();
 
-    while (timeinfo.tm_year < (2016 - 1900) && ++retry < retry_count)
+    while (++retry <= retry_count)
     {
         ESP_LOGI(TAG, "Waiting for system time to be set... (%d/%d)", retry, retry_count);
         vTaskDelay(pdMS_TO_TICKS(2000));
         time(&now);
         localtime_r(&now, &timeinfo);
+        if (timeinfo.tm_year >= (2016 - 1900))
+        {
+            break;
+        }
     }
+
+    sntp_stop();
 }
 
 static void sntp_task(void *arg)
@@ -320,33 +350,52 @@ static void sntp_task(void *arg)
     time(&now);
     localtime_r(&now, &timeinfo);
 
-    if (timeinfo.tm_year < (2016 - 1900))
-    {
-        ESP_LOGI(TAG, "Time is not set yet. Connecting to WiFi and getting time over NTP.");
-        obtain_time();
-    }
+    sync_time_once();
 
     setenv("TZ", "CST-8", 1);
     tzset();
 
-    while (1)
+    time(&now);
+    localtime_r(&now, &timeinfo);
+
+    if (timeinfo.tm_year < (2016 - 1900))
     {
-        time(&now);
-        localtime_r(&now, &timeinfo);
-
-        if (timeinfo.tm_year < (2016 - 1900))
-        {
-            ESP_LOGE(TAG, "The current date/time error");
-        }
-        else
-        {
-            strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
-            ESP_LOGI(TAG, "The current date/time in Shanghai is: %s", strftime_buf);
-        }
-
-        ESP_LOGI(TAG, "Free heap size: %d", esp_get_free_heap_size());
-        vTaskDelay(pdMS_TO_TICKS(30000));
+        ESP_LOGE(TAG, "The current date/time error");
     }
+    else
+    {
+        strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
+        ESP_LOGI(TAG, "The current date/time in Shanghai is: %s", strftime_buf);
+    }
+
+    ESP_LOGI(TAG, "Free heap size: %d", esp_get_free_heap_size());
+    s_sntp_task_running = 0;
+    vTaskDelete(NULL);
+}
+
+static esp_err_t app_request_sntp_sync(void)
+{
+    BaseType_t task_ok;
+
+    if (is_wifi_connected == 0)
+    {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (s_sntp_task_running)
+    {
+        return ESP_OK;
+    }
+
+    s_sntp_task_running = 1;
+    task_ok = xTaskCreate(sntp_task, "sntp_task", 1536, NULL, 10, NULL);
+    if (task_ok != pdPASS)
+    {
+        s_sntp_task_running = 0;
+        return ESP_ERR_NO_MEM;
+    }
+
+    return ESP_OK;
 }
 
 static void lv_esp8266_log(const char *buf)
@@ -354,16 +403,65 @@ static void lv_esp8266_log(const char *buf)
     ESP_LOGI(TAG, "%s", buf);
 }
 
+static void app_test_spiffs(void)
+{
+    esp_vfs_spiffs_conf_t conf = {
+        .base_path = "/spiffs",
+        .partition_label = "storage",
+        .max_files = 8,
+        .format_if_mount_failed = false,
+    };
+    esp_err_t ret;
+    size_t total = 0;
+    size_t used = 0;
+    DIR *dir;
+    struct dirent *entry;
+
+    ret = esp_vfs_spiffs_register(&conf);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "SPIFFS mount failed for partition 'storage': %s", esp_err_to_name(ret));
+        return;
+    }
+
+    ret = esp_spiffs_info("storage", &total, &used);
+    if (ret != ESP_OK)
+    {
+        ESP_LOGE(TAG, "Failed to read SPIFFS info: %s", esp_err_to_name(ret));
+        return;
+    }
+
+    ESP_LOGI(TAG, "SPIFFS mounted at /spiffs, total=%u, used=%u",
+        (unsigned)total, (unsigned)used);
+
+    dir = opendir("/spiffs");
+    if (dir == NULL)
+    {
+        ESP_LOGE(TAG, "Failed to open /spiffs");
+        return;
+    }
+
+    ESP_LOGI(TAG, "SPIFFS file list:");
+    while ((entry = readdir(dir)) != NULL)
+    {
+        ESP_LOGI(TAG, "  %s", entry->d_name);
+    }
+
+    closedir(dir);
+}
+
 void app_main(void)
 {
     char buf[32];
-    uint32_t secCount = 0;
+    uint32_t weather_refresh_sec = WEATHER_REFRESH_INTERVAL_S;
+    uint32_t sntp_sync_sec = SNTP_SYNC_INTERVAL_S;
     int min_last = -1;
     char last_wifi_connected = 0;
 
     ESP_ERROR_CHECK(nvs_flash_init());
     setenv("TZ", "CST-8", 1);
     tzset();
+    app_test_spiffs();
 
     vTaskDelay(pdMS_TO_TICKS(2000));
     lcd_init();
@@ -390,45 +488,61 @@ void app_main(void)
     {
         time_t t;
         static char s_portal_started = 0;
-        static char s_sntp_started = 0;
 
         vTaskDelay(pdMS_TO_TICKS(1000));
 
-        if (is_wifi_connected != 0 && !last_wifi_connected)
-        {
-            secCount = 0;
-            ESP_LOGI(TAG, "WiFi got IP, trigger immediate weather refresh");
-            http_seniverse_request_refresh();
-        }
-        last_wifi_connected = is_wifi_connected;
-
         if (is_wifi_connected != 0)
         {
-            if (!s_portal_started)
+            if (s_request_portal_start && !s_portal_started)
             {
-                config_portal_start();
-                s_portal_started = 1;
-                ESP_LOGI(TAG, "config portal started after WiFi got IP, heap=%u",
+                esp_err_t portal_err = config_portal_start();
+                s_request_portal_start = 0;
+                if (portal_err == ESP_OK)
+                {
+                    s_portal_started = 1;
+                    ESP_LOGI(TAG, "config portal started on demand, heap=%u",
+                        (unsigned)esp_get_free_heap_size());
+                }
+                else
+                {
+                    ESP_LOGW(TAG, "config portal start failed on demand: %s, heap=%u",
+                        esp_err_to_name(portal_err),
+                        (unsigned)esp_get_free_heap_size());
+                }
+            }
+
+            if (!last_wifi_connected)
+            {
+                weather_refresh_sec = WEATHER_REFRESH_INTERVAL_S - WEATHER_REFRESH_START_DELAY_S;
+                sntp_sync_sec = 0;
+                if (app_request_sntp_sync() == ESP_OK)
+                {
+                    ESP_LOGI(TAG, "sntp_task started after WiFi got IP, heap=%u",
+                        (unsigned)esp_get_free_heap_size());
+                }
+                ESP_LOGI(TAG, "WiFi got IP, schedule weather refresh in %u s, heap=%u",
+                    (unsigned)WEATHER_REFRESH_START_DELAY_S,
                     (unsigned)esp_get_free_heap_size());
             }
 
-            if (!s_sntp_started)
+            if (weather_refresh_sec++ >= WEATHER_REFRESH_INTERVAL_S)
             {
-                xTaskCreate(sntp_task, "sntp_task", 1536, NULL, 10, NULL);
-                s_sntp_started = 1;
-                ESP_LOGI(TAG, "sntp_task started after WiFi got IP, heap=%u",
-                    (unsigned)esp_get_free_heap_size());
-            }
-        }
-
-        if (secCount++ >= 300)
-        {
-            secCount = 0;
-            if (is_wifi_connected != 0)
-            {
+                weather_refresh_sec = 0;
                 http_seniverse_request_refresh();
             }
+
+            if (sntp_sync_sec++ >= SNTP_SYNC_INTERVAL_S)
+            {
+                sntp_sync_sec = 0;
+                if (app_request_sntp_sync() == ESP_OK)
+                {
+                    ESP_LOGI(TAG, "sntp_task started by scheduler, heap=%u",
+                        (unsigned)esp_get_free_heap_size());
+                }
+            }
         }
+
+        last_wifi_connected = is_wifi_connected;
 
         t = time(0);
         if ((int)(t / 60) != min_last)

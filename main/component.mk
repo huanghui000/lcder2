@@ -9,3 +9,6 @@ COMPONENT_SRCDIRS += GUI/
 COMPONENT_SRCDIRS += screens
 COMPONENT_SRCDIRS += fonts
 COMPONENT_SRCDIRS += ../GUI/src/extra/libs/qrcode
+COMPONENT_SRCDIRS += ../GUI/src/extra/libs/fsdrv
+
+COMPONENT_OBJEXCLUDE += fonts/ui_font_simliSmall.o

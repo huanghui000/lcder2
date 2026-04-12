@@ -5,7 +5,9 @@
 
 #include "ui.h"
 #include "ui_helpers.h"
+#include "ui_spiffs_font.h"
 #include "../GUI/src/extra/themes/mono/lv_theme_mono.h"
+#include "esp_log.h"
 
 void ui_Screen1_screen_init(void);
 lv_obj_t * ui_Screen1;
@@ -38,6 +40,14 @@ lv_obj_t * ui_LabelTomorrowWindSpeed;
 
 lv_obj_t * ui____initial_actions0;
 
+static const char *TAG = "ui";
+static lv_font_t *s_simli_small_spiffs_font;
+
+const lv_font_t * ui_font_get_simli_small(void)
+{
+    return (s_simli_small_spiffs_font != NULL) ? s_simli_small_spiffs_font : &lv_font_montserrat_18;
+}
+
 #if LV_COLOR_DEPTH != 8
     #error "LV_COLOR_DEPTH should be 8bit to match SquareLine Studio's settings"
 #endif
@@ -49,6 +59,16 @@ void ui_init(void)
 {
     lv_disp_t * dispp = lv_disp_get_default();
     lv_theme_t * theme = lv_theme_mono_init(dispp, false, &lv_font_montserrat_18);
+
+    if (s_simli_small_spiffs_font == NULL) {
+        s_simli_small_spiffs_font = ui_spiffs_font_load("S:/spiffs/simliSmall.bin");
+        if (s_simli_small_spiffs_font != NULL) {
+            ESP_LOGI(TAG, "Loaded font from SPIFFS: /spiffs/simliSmall.bin");
+        } else {
+            ESP_LOGW(TAG, "Failed to load /spiffs/simliSmall.bin");
+        }
+    }
+
     lv_disp_set_theme(dispp, theme);
     ui_Screen1_screen_init();
     ui____initial_actions0 = lv_obj_create(NULL);

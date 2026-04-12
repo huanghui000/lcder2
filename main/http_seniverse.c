@@ -1,8 +1,9 @@
-#include "http_seniverse.h"
+﻿#include "http_seniverse.h"
 
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <errno.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -29,6 +30,9 @@ extern char is_wifi_connected;
 #define WEATHER_CFG_NAMESPACE   "weather_cfg"
 #define DEFAULT_LOCATION_ID     "laishan"
 #define DEFAULT_LOCATION_NAME   "Laishan"
+#define HTTP_REQUEST_RETRY_COUNT 2
+#define HTTP_REQUEST_RETRY_DELAY_MS 1000
+#define HTTP_GET_TASK_STACK_SIZE 3072
 
 static const char *TAG = "Http-GET";
 
@@ -284,12 +288,14 @@ int http_get_response(char *buf, int buf_len, const char *server, const char *re
     s = socket(res->ai_family, res->ai_socktype, 0);
     if (s < 0)
     {
+        ESP_LOGE(TAG, "socket create failed errno=%d", errno);
         freeaddrinfo(res);
         return -2;
     }
 
     if (connect(s, res->ai_addr, res->ai_addrlen) != 0)
     {
+        ESP_LOGE(TAG, "connect failed errno=%d", errno);
         close(s);
         freeaddrinfo(res);
         return -3;
@@ -299,12 +305,14 @@ int http_get_response(char *buf, int buf_len, const char *server, const char *re
 
     if (write(s, req, strlen(req)) < 0)
     {
+        ESP_LOGE(TAG, "socket write failed errno=%d", errno);
         close(s);
         return -4;
     }
 
     if (setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &rcv_to, sizeof(rcv_to)) < 0)
     {
+        ESP_LOGE(TAG, "setsockopt SO_RCVTIMEO failed errno=%d", errno);
         close(s);
         return -5;
     }
@@ -323,6 +331,7 @@ int http_get_response(char *buf, int buf_len, const char *server, const char *re
 
     if (r < 0)
     {
+        ESP_LOGE(TAG, "socket read failed errno=%d", errno);
         return -6;
     }
     if (idx >= buf_len - 1)
@@ -338,6 +347,7 @@ static esp_err_t seniverse_request_json(const char *path, char *recv_buf, size_t
     char *req;
     char *body;
     int err;
+    int attempt;
     size_t req_len;
 
     req_len = strlen(path) + strlen(WEB_SERVER) + 48;
@@ -351,7 +361,23 @@ static esp_err_t seniverse_request_json(const char *path, char *recv_buf, size_t
         "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n",
         path, WEB_SERVER);
 
-    err = http_get_response(recv_buf, (int)recv_buf_len, WEB_SERVER, req);
+    err = -1;
+    for (attempt = 1; attempt <= HTTP_REQUEST_RETRY_COUNT; ++attempt)
+    {
+        err = http_get_response(recv_buf, (int)recv_buf_len, WEB_SERVER, req);
+        if (err == 0)
+        {
+            break;
+        }
+
+        if (attempt < HTTP_REQUEST_RETRY_COUNT)
+        {
+            ESP_LOGW(TAG, "HTTP request attempt %d/%d failed: %d, retry in %d ms, path=%s",
+                attempt, HTTP_REQUEST_RETRY_COUNT, err, HTTP_REQUEST_RETRY_DELAY_MS, path);
+            vTaskDelay(pdMS_TO_TICKS(HTTP_REQUEST_RETRY_DELAY_MS));
+        }
+    }
+
     free(req);
     if (err != 0)
     {
@@ -678,7 +704,7 @@ void http_seniverse_request_refresh(void)
     }
 
     s_refresh_pending = 0;
-    task_ok = xTaskCreate(http_get_task, "http_get_task", 4096, NULL, 5, &s_http_task_handle);
+    task_ok = xTaskCreate(http_get_task, "http_get_task", HTTP_GET_TASK_STACK_SIZE, NULL, 5, &s_http_task_handle);
     xSemaphoreGive(s_http_task_mutex);
 
     if (task_ok == pdPASS)
@@ -705,6 +731,10 @@ void http_get_task(void *pvParameters)
     while (1)
     {
         char run_again = 0;
+
+        ESP_LOGI(TAG, "weather refresh task running, heap=%u stack_hwm=%u",
+            (unsigned)esp_get_free_heap_size(),
+            (unsigned)uxTaskGetStackHighWaterMark(NULL));
 
         if (is_wifi_connected == 0)
         {

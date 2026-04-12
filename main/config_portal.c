@@ -459,7 +459,7 @@ static esp_err_t portal_wifi_post_handler(httpd_req_t *req)
     return portal_redirect_home(req);
 }
 
-void config_portal_start(void)
+esp_err_t config_portal_start(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     httpd_uri_t root_uri = {
@@ -501,25 +501,45 @@ void config_portal_start(void)
 
     if (s_server != NULL)
     {
-        return;
+        return ESP_OK;
     }
 
-    config.stack_size = 5120;
+    config.stack_size = 4096;
+    config.max_open_sockets = 3;
+    config.max_uri_handlers = 6;
+    config.max_resp_headers = 2;
+    config.backlog_conn = 1;
+    config.lru_purge_enable = true;
 
     if (s_portal_mutex == NULL)
     {
         s_portal_mutex = xSemaphoreCreateMutex();
+        if (s_portal_mutex == NULL)
+        {
+            return ESP_ERR_NO_MEM;
+        }
     }
     if (s_city_lookup.mutex == NULL)
     {
         s_city_lookup.mutex = xSemaphoreCreateMutex();
+        if (s_city_lookup.mutex == NULL)
+        {
+            return ESP_ERR_NO_MEM;
+        }
     }
     if (s_city_lookup.done == NULL)
     {
         s_city_lookup.done = xSemaphoreCreateBinary();
+        if (s_city_lookup.done == NULL)
+        {
+            return ESP_ERR_NO_MEM;
+        }
     }
 
     portal_set_status("就绪。");
+
+    ESP_LOGI(TAG, "starting config portal, heap=%u",
+        (unsigned)esp_get_free_heap_size());
 
     if (httpd_start(&s_server, &config) == ESP_OK)
     {
@@ -530,9 +550,9 @@ void config_portal_start(void)
         httpd_register_uri_handler(s_server, &ping_uri);
         httpd_register_uri_handler(s_server, &favicon_uri);
         ESP_LOGI(TAG, "config portal started");
+        return ESP_OK;
     }
-    else
-    {
-        ESP_LOGE(TAG, "failed to start config portal");
-    }
+
+    ESP_LOGE(TAG, "failed to start config portal");
+    return ESP_FAIL;
 }
