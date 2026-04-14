@@ -20,26 +20,34 @@
 #include <cJSON.h>
 
 #include "ui.h"
+#include "startup_ui.h"
 
 extern SemaphoreHandle_t xLvglMutex;
 extern char is_wifi_connected;
 
 #define WEB_SERVER              "api.seniverse.com"
 #define WEB_PORT                "80"
-#define SENIVERSE_API_KEY       "SkEFlh-N-DtiJTcnf"
+#define SENIVERSE_API_KEY       "smtq3n0ixdggurox"
 #define WEATHER_CFG_NAMESPACE   "weather_cfg"
 #define DEFAULT_LOCATION_ID     "laishan"
 #define DEFAULT_LOCATION_NAME   "Laishan"
 #define HTTP_REQUEST_RETRY_COUNT 2
 #define HTTP_REQUEST_RETRY_DELAY_MS 1000
-#define HTTP_GET_TASK_STACK_SIZE 3072
+#define HTTP_GET_TASK_STACK_SIZE 5120
+#define HITOKOTO_SERVER         "v1.hitokoto.cn"
+#define HITOKOTO_PATH           "/?encode=json&max_length=26&c=d&c=h&c=i&c=k"
+#define HTTP_RECV_TIMEOUT_S     8
+#define HITOKOTO_MIN_HEAP_BYTES 10000U
+#define HITOKOTO_REQUEST_RETRY_COUNT 3
 
 static const char *TAG = "Http-GET";
 
 static SemaphoreHandle_t s_weather_cfg_mutex;
 static SemaphoreHandle_t s_http_task_mutex;
 static TaskHandle_t s_http_task_handle;
-static char s_refresh_pending;
+static char s_weather_refresh_pending;
+static char s_hitokoto_refresh_pending;
+static char s_initial_weather_ready;
 static char s_location_id[64] = DEFAULT_LOCATION_ID;
 static char s_location_name[64] = DEFAULT_LOCATION_NAME;
 
@@ -54,6 +62,8 @@ static const char weatherIconTbl[][3] =
     {30, 'N', 0}, {31, 'O', 0}, {32, 'P', 0}, {33, 'P', 0}, {34, 'P', 0},
     {35, 'P', 0}, {36, 'P', 0}, {37, 'Z', 0}, {38, 'A', 0}, {99, 'Z', 0},
 };
+
+int http_get_response(char *buf, int buf_len, const char *server, const char *req);
 
 static char *http_response_get_body(char *respond, size_t len)
 {
@@ -156,6 +166,135 @@ static const char *wind_speed_to_level(cJSON *wind_speed)
 
     snprintf(level_buf, sizeof(level_buf), "%d级", level);
     return level_buf;
+}
+
+static void format_hitokoto_text(const char *src, char *dst, size_t dst_len)
+{
+    size_t di = 0;
+
+    if (dst == NULL || dst_len == 0)
+    {
+        return;
+    }
+
+    if (src == NULL || src[0] == 0)
+    {
+        strncpy(dst, "  --", dst_len);
+        dst[dst_len - 1] = 0;
+        return;
+    }
+
+    di += (size_t)snprintf(dst, dst_len, "  ");
+    while (*src != 0 && di + 1 < dst_len)
+    {
+        char c = *src++;
+        if (c == '\r' || c == '\n' || c == '\t')
+        {
+            c = ' ';
+        }
+        dst[di++] = c;
+    }
+    dst[di] = 0;
+}
+
+static void update_hitokoto_page(cJSON *root)
+{
+    cJSON *hitokoto = cJSON_GetObjectItem(root, "hitokoto");
+    cJSON *from = cJSON_GetObjectItem(root, "from");
+    cJSON *from_who = cJSON_GetObjectItem(root, "from_who");
+    char text_buf[192];
+    char author_buf[64];
+    const char *author = "--";
+
+    if (from_who != NULL && cJSON_IsString(from_who) && from_who->valuestring != NULL && from_who->valuestring[0] != 0)
+    {
+        author = from_who->valuestring;
+    }
+    else if (from != NULL && cJSON_IsString(from) && from->valuestring != NULL && from->valuestring[0] != 0)
+    {
+        author = from->valuestring;
+    }
+
+    format_hitokoto_text(json_string_or_placeholder(hitokoto), text_buf, sizeof(text_buf));
+    snprintf(author_buf, sizeof(author_buf), "-- %s", author);
+
+    xSemaphoreTake(xLvglMutex, portMAX_DELAY);
+    lv_label_set_text(ui_LabelQuoteText, text_buf);
+    lv_label_set_text(ui_LabelQuoteAuthor, author_buf);
+    xSemaphoreGive(xLvglMutex);
+}
+
+static esp_err_t simple_http_request_json(const char *server, const char *path,
+    char *recv_buf, size_t recv_buf_len, cJSON **root_out)
+{
+    char *req;
+    char *body;
+    int err;
+    int attempt;
+    size_t req_len;
+
+    if (server == NULL || path == NULL || recv_buf == NULL || recv_buf_len < 2 || root_out == NULL)
+    {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    req_len = strlen(path) + strlen(server) + 96;
+    req = malloc(req_len);
+    if (req == NULL)
+    {
+        return ESP_ERR_NO_MEM;
+    }
+
+    snprintf(req, req_len,
+        "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: lcder/1.0\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
+        path, server);
+
+    for (attempt = 1; attempt <= HITOKOTO_REQUEST_RETRY_COUNT; ++attempt)
+    {
+        err = http_get_response(recv_buf, (int)recv_buf_len, server, req);
+        if (err == 0)
+        {
+            body = http_response_get_body(recv_buf, strlen(recv_buf));
+            *root_out = cJSON_Parse(body);
+            if (*root_out != NULL)
+            {
+                free(req);
+                return ESP_OK;
+            }
+
+            ESP_LOGW(TAG, "response is not valid JSON on attempt %d/%d, host=%s path=%s body=%.120s",
+                attempt, HITOKOTO_REQUEST_RETRY_COUNT, server, path, body);
+        }
+        else
+        {
+            ESP_LOGW(TAG, "HTTP request failed on attempt %d/%d: %d, host=%s path=%s",
+                attempt, HITOKOTO_REQUEST_RETRY_COUNT, err, server, path);
+        }
+
+        if (attempt < HITOKOTO_REQUEST_RETRY_COUNT)
+        {
+            vTaskDelay(pdMS_TO_TICKS(HTTP_REQUEST_RETRY_DELAY_MS));
+        }
+    }
+
+    free(req);
+    return ESP_FAIL;
+}
+
+static esp_err_t fetch_hitokoto(char *recv_buf, size_t recv_buf_len)
+{
+    cJSON *root = NULL;
+    esp_err_t err;
+
+    err = simple_http_request_json(HITOKOTO_SERVER, HITOKOTO_PATH, recv_buf, recv_buf_len, &root);
+    if (err != ESP_OK)
+    {
+        return err;
+    }
+
+    update_hitokoto_page(root);
+    cJSON_Delete(root);
+    return ESP_OK;
 }
 
 static esp_err_t load_weather_cfg_from_nvs(void)
@@ -267,7 +406,7 @@ int http_get_response(char *buf, int buf_len, const char *server, const char *re
         .ai_family = AF_INET,
         .ai_socktype = SOCK_STREAM,
     };
-    static const struct timeval rcv_to = {5, 0};
+    static const struct timeval rcv_to = {HTTP_RECV_TIMEOUT_S, 0};
     struct addrinfo *res = NULL;
     struct in_addr *addr;
     int s;
@@ -324,6 +463,12 @@ int http_get_response(char *buf, int buf_len, const char *server, const char *re
         if (r > 0)
         {
             idx += r;
+        }
+        else if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) && idx > 0)
+        {
+            ESP_LOGW(TAG, "socket read timeout after %d bytes, treat as response end", idx);
+            r = 0;
+            break;
         }
     } while (r > 0 && idx < (buf_len - 1));
 
@@ -506,6 +651,25 @@ static void update_daily_page(lv_obj_t *label_text, lv_obj_t *label_temp, lv_obj
     }
 }
 
+static char update_wind_labels(lv_obj_t *label_wind_dir, lv_obj_t *label_wind_speed, cJSON *weather_node)
+{
+    cJSON *wind_direction = cJSON_GetObjectItem(weather_node, "wind_direction");
+    cJSON *wind_speed = cJSON_GetObjectItem(weather_node, "wind_speed");
+    char has_wind_direction = (char)(wind_direction != NULL && cJSON_IsString(wind_direction) &&
+        wind_direction->valuestring != NULL && wind_direction->valuestring[0] != 0);
+    char has_wind_speed = (char)(wind_speed != NULL && cJSON_IsString(wind_speed) &&
+        wind_speed->valuestring != NULL && wind_speed->valuestring[0] != 0);
+
+    if (!has_wind_direction && !has_wind_speed)
+    {
+        return 0;
+    }
+
+    lv_label_set_text_fmt(label_wind_dir, "风向: %s", json_string_or_placeholder(wind_direction));
+    lv_label_set_text_fmt(label_wind_speed, "风速: %s", wind_speed_to_level(wind_speed));
+    return 1;
+}
+
 static esp_err_t fetch_daily_weather(const char *location_id, char *recv_buf, size_t recv_buf_len)
 {
     char path[320];
@@ -542,6 +706,9 @@ static esp_err_t fetch_daily_weather(const char *location_id, char *recv_buf, si
     {
         update_daily_page(ui_LabelTodayText, ui_LabelTodayTemp, ui_LabelTodayWindDir,
             ui_LabelTodayWindSpeed, ui_LabelTodayIcon, day0);
+        /* Free now.json does not include wind fields, so use today's daily data as
+         * the fallback wind info for the current weather page. */
+        update_wind_labels(ui_LabelNowWindDir, ui_LabelNowWindSpeed, day0);
     }
     if (day1 != NULL)
     {
@@ -585,8 +752,6 @@ static esp_err_t fetch_now_weather(const char *location_id, char *recv_buf, size
         cJSON *text = cJSON_GetObjectItem(now, "text");
         cJSON *code = cJSON_GetObjectItem(now, "code");
         cJSON *temperature = cJSON_GetObjectItem(now, "temperature");
-        cJSON *wind_speed = cJSON_GetObjectItem(now, "wind_speed");
-        cJSON *wind_direction = cJSON_GetObjectItem(now, "wind_direction");
 
         xSemaphoreTake(xLvglMutex, portMAX_DELAY);
         update_addr_if_present(location);
@@ -599,8 +764,7 @@ static esp_err_t fetch_now_weather(const char *location_id, char *recv_buf, size
         {
             lv_label_set_text(ui_LabelNowTemp, "--");
         }
-        lv_label_set_text_fmt(ui_LabelNowWindDir, "风向: %s", json_string_or_placeholder(wind_direction));
-        lv_label_set_text_fmt(ui_LabelNowWindSpeed, "风速: %s", wind_speed_to_level(wind_speed));
+        update_wind_labels(ui_LabelNowWindDir, ui_LabelNowWindSpeed, now);
         if (code != NULL && cJSON_IsString(code))
         {
             lv_label_set_text(ui_LabelNowIcon, lookupWeatherCode(code->valuestring));
@@ -695,15 +859,15 @@ void http_seniverse_request_refresh(void)
     }
 
     xSemaphoreTake(s_http_task_mutex, portMAX_DELAY);
+    s_weather_refresh_pending = 1;
+    s_hitokoto_refresh_pending = 1;
     if (s_http_task_handle != NULL)
     {
-        s_refresh_pending = 1;
         xSemaphoreGive(s_http_task_mutex);
         ESP_LOGI(TAG, "weather refresh already running, mark one more refresh pending");
         return;
     }
 
-    s_refresh_pending = 0;
     task_ok = xTaskCreate(http_get_task, "http_get_task", HTTP_GET_TASK_STACK_SIZE, NULL, 5, &s_http_task_handle);
     xSemaphoreGive(s_http_task_mutex);
 
@@ -715,8 +879,65 @@ void http_seniverse_request_refresh(void)
     {
         xSemaphoreTake(s_http_task_mutex, portMAX_DELAY);
         s_http_task_handle = NULL;
+        s_weather_refresh_pending = 0;
+        s_hitokoto_refresh_pending = 0;
         xSemaphoreGive(s_http_task_mutex);
         ESP_LOGE(TAG, "failed to create weather refresh task");
+    }
+}
+
+void http_seniverse_request_hitokoto_refresh(void)
+{
+    BaseType_t task_ok;
+
+    if (!s_initial_weather_ready)
+    {
+        ESP_LOGI(TAG, "skip hitokoto refresh until initial weather is ready");
+        return;
+    }
+
+    if (is_wifi_connected == 0)
+    {
+        ESP_LOGW(TAG, "skip hitokoto refresh request because WiFi is not connected yet");
+        return;
+    }
+
+    if (esp_get_free_heap_size() < HITOKOTO_MIN_HEAP_BYTES)
+    {
+        ESP_LOGW(TAG, "skip hitokoto refresh because heap is low: %u",
+            (unsigned)esp_get_free_heap_size());
+        return;
+    }
+
+    if (s_http_task_mutex == NULL)
+    {
+        ESP_LOGW(TAG, "skip hitokoto refresh request because HTTP task mutex is not ready");
+        return;
+    }
+
+    xSemaphoreTake(s_http_task_mutex, portMAX_DELAY);
+    s_hitokoto_refresh_pending = 1;
+    if (s_http_task_handle != NULL)
+    {
+        xSemaphoreGive(s_http_task_mutex);
+        ESP_LOGI(TAG, "hitokoto refresh already running, mark one more refresh pending");
+        return;
+    }
+
+    task_ok = xTaskCreate(http_get_task, "http_get_task", HTTP_GET_TASK_STACK_SIZE, NULL, 5, &s_http_task_handle);
+    xSemaphoreGive(s_http_task_mutex);
+
+    if (task_ok == pdPASS)
+    {
+        ESP_LOGI(TAG, "spawn hitokoto refresh task");
+    }
+    else
+    {
+        xSemaphoreTake(s_http_task_mutex, portMAX_DELAY);
+        s_http_task_handle = NULL;
+        s_hitokoto_refresh_pending = 0;
+        xSemaphoreGive(s_http_task_mutex);
+        ESP_LOGE(TAG, "failed to create hitokoto refresh task");
     }
 }
 
@@ -731,6 +952,8 @@ void http_get_task(void *pvParameters)
     while (1)
     {
         char run_again = 0;
+        char need_weather = 0;
+        char need_hitokoto = 0;
 
         ESP_LOGI(TAG, "weather refresh task running, heap=%u stack_hwm=%u",
             (unsigned)esp_get_free_heap_size(),
@@ -742,18 +965,42 @@ void http_get_task(void *pvParameters)
             break;
         }
 
+        xSemaphoreTake(s_http_task_mutex, portMAX_DELAY);
+        need_weather = s_weather_refresh_pending;
+        need_hitokoto = s_hitokoto_refresh_pending;
+        s_weather_refresh_pending = 0;
+        s_hitokoto_refresh_pending = 0;
+        xSemaphoreGive(s_http_task_mutex);
+
         xSemaphoreTake(s_weather_cfg_mutex, portMAX_DELAY);
         copy_location_locked(location_id, sizeof(location_id), location_name, sizeof(location_name));
         xSemaphoreGive(s_weather_cfg_mutex);
 
-        ESP_LOGI(TAG, "Getting weather for %s (%s)", location_name, location_id);
+        if (need_weather)
+        {
+            esp_err_t daily_err;
+            esp_err_t now_err;
 
-        fetch_daily_weather(location_id, recv_buf, sizeof(recv_buf));
-        fetch_now_weather(location_id, recv_buf, sizeof(recv_buf));
+            ESP_LOGI(TAG, "Getting weather for %s (%s)", location_name, location_id);
+            daily_err = fetch_daily_weather(location_id, recv_buf, sizeof(recv_buf));
+            now_err = fetch_now_weather(location_id, recv_buf, sizeof(recv_buf));
+
+            if (!s_initial_weather_ready && (daily_err == ESP_OK || now_err == ESP_OK))
+            {
+                s_initial_weather_ready = 1;
+                startup_ui_set_hold_visible(0);
+                startup_ui_hide_delayed(0);
+            }
+        }
+
+        if (need_hitokoto)
+        {
+            ESP_LOGI(TAG, "Getting hitokoto");
+            fetch_hitokoto(recv_buf, sizeof(recv_buf));
+        }
 
         xSemaphoreTake(s_http_task_mutex, portMAX_DELAY);
-        run_again = s_refresh_pending;
-        s_refresh_pending = 0;
+        run_again = (char)(s_weather_refresh_pending || s_hitokoto_refresh_pending);
         if (!run_again)
         {
             s_http_task_handle = NULL;
@@ -773,7 +1020,8 @@ void http_get_task(void *pvParameters)
     {
         xSemaphoreTake(s_http_task_mutex, portMAX_DELAY);
         s_http_task_handle = NULL;
-        s_refresh_pending = 0;
+        s_weather_refresh_pending = 0;
+        s_hitokoto_refresh_pending = 0;
         xSemaphoreGive(s_http_task_mutex);
     }
 

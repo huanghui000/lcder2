@@ -22,7 +22,13 @@ void _ui_basic_set_property(lv_obj_t * target, int id, int val)
 
 void _ui_dropdown_set_property(lv_obj_t * target, int id, int val)
 {
+#if LV_USE_DROPDOWN
     if(id == _UI_DROPDOWN_PROPERTY_SELECTED) lv_dropdown_set_selected(target, val);
+#else
+    LV_UNUSED(target);
+    LV_UNUSED(id);
+    LV_UNUSED(val);
+#endif
 }
 
 void _ui_image_set_property(lv_obj_t * target, int id, uint8_t * val)
@@ -86,7 +92,12 @@ void _ui_slider_increment(lv_obj_t * target, int val, int anm)
 
 void _ui_keyboard_set_target(lv_obj_t * keyboard, lv_obj_t * textarea)
 {
+#if LV_USE_KEYBOARD && LV_USE_TEXTAREA
     lv_keyboard_set_textarea(keyboard, textarea);
+#else
+    LV_UNUSED(keyboard);
+    LV_UNUSED(textarea);
+#endif
 }
 
 void _ui_flag_modify(lv_obj_t * target, int32_t flag, int value)
@@ -112,12 +123,16 @@ void _ui_state_modify(lv_obj_t * target, int32_t state, int value)
 void _ui_textarea_move_cursor(lv_obj_t * target, int val)
 
 {
-
+#if LV_USE_TEXTAREA
     if(val == UI_MOVE_CURSOR_UP) lv_textarea_cursor_up(target);
     if(val == UI_MOVE_CURSOR_RIGHT) lv_textarea_cursor_right(target);
     if(val == UI_MOVE_CURSOR_DOWN) lv_textarea_cursor_down(target);
     if(val == UI_MOVE_CURSOR_LEFT) lv_textarea_cursor_left(target);
     lv_obj_add_state(target, LV_STATE_FOCUSED);
+#else
+    LV_UNUSED(target);
+    LV_UNUSED(val);
+#endif
 }
 
 void scr_unloaded_delete_cb(lv_event_t * e)
@@ -326,13 +341,17 @@ void _ui_checked_set_text_value(lv_obj_t * trg, lv_obj_t * src, const char * txt
 void _ui_spinbox_step(lv_obj_t * target, int val)
 
 {
-
+#if LV_USE_SPINBOX
     if(val > 0) lv_spinbox_increment(target);
 
     else lv_spinbox_decrement(target);
 
 
     lv_event_send(target, LV_EVENT_VALUE_CHANGED, 0);
+#else
+    LV_UNUSED(target);
+    LV_UNUSED(val);
+#endif
 }
 
 void _ui_switch_theme(int val)

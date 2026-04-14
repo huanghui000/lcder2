@@ -20,6 +20,7 @@ static lv_obj_t *s_detail;
 static lv_timer_t *s_hide_timer;
 static char s_ui_ready;
 static char s_has_pending_state;
+static char s_hold_visible;
 static uint32_t s_last_apply_tick;
 static startup_ui_state_t s_cached_state = {"", "", 0};
 static startup_ui_state_t s_pending_state;
@@ -62,8 +63,11 @@ static void startup_ui_apply_state(const startup_ui_state_t *state)
 
     if (state->hide_after_update)
     {
-        s_hide_timer = lv_timer_create(startup_ui_hide_timer_cb, 1200, NULL);
-        lv_timer_set_repeat_count(s_hide_timer, 1);
+        if (!s_hold_visible)
+        {
+            s_hide_timer = lv_timer_create(startup_ui_hide_timer_cb, 1200, NULL);
+            lv_timer_set_repeat_count(s_hide_timer, 1);
+        }
     }
 }
 
@@ -157,4 +161,9 @@ void startup_ui_hide_delayed(uint32_t delay_ms)
 {
     LV_UNUSED(delay_ms);
     startup_ui_show_connected("Network connected");
+}
+
+void startup_ui_set_hold_visible(char hold_visible)
+{
+    s_hold_visible = hold_visible ? 1 : 0;
 }

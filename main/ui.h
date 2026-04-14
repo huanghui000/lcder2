@@ -25,6 +25,7 @@ extern lv_obj_t * ui_WeatherContent;
 extern lv_obj_t * ui_WeatherPageNow;
 extern lv_obj_t * ui_WeatherPageToday;
 extern lv_obj_t * ui_WeatherPageTomorrow;
+extern lv_obj_t * ui_QuotePage;
 extern lv_obj_t * ui_LabelNowTitle;
 extern lv_obj_t * ui_LabelNowIcon;
 extern lv_obj_t * ui_LabelNowText;
@@ -43,6 +44,9 @@ extern lv_obj_t * ui_LabelTomorrowText;
 extern lv_obj_t * ui_LabelTomorrowTemp;
 extern lv_obj_t * ui_LabelTomorrowWindDir;
 extern lv_obj_t * ui_LabelTomorrowWindSpeed;
+extern lv_obj_t * ui_LabelQuoteTitle;
+extern lv_obj_t * ui_LabelQuoteText;
+extern lv_obj_t * ui_LabelQuoteAuthor;
 
 extern lv_obj_t * ui____initial_actions0;
 
@@ -51,7 +55,6 @@ LV_FONT_DECLARE(ui_font_Font1);
 LV_FONT_DECLARE(ui_font_Font1small);
 LV_FONT_DECLARE(ui_font_iconfont);
 LV_FONT_DECLARE(ui_font_iconfontSmall);
-LV_FONT_DECLARE(ui_font_simli);
 
 const lv_font_t * ui_font_get_simli_small(void);
 

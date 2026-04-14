@@ -1,15 +1,15 @@
 #include "ui_spiffs_font.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "esp_log.h"
 #include "esp_system.h"
 
 #include "../GUI/src/font/lv_font_fmt_txt.h"
-#include "../GUI/src/misc/lv_fs.h"
 #include "../GUI/src/misc/lv_mem.h"
 
-#define UI_SPIFFS_FONT_CACHE_SLOTS 32U
+#define UI_SPIFFS_FONT_CACHE_SLOTS 64U
 
 typedef struct {
     uint32_t version;
@@ -49,6 +49,11 @@ typedef struct {
 } ui_spiffs_cmap_table_t;
 
 typedef struct {
+    ui_spiffs_cmap_table_t table;
+    uint32_t data_start;
+} ui_spiffs_cmap_runtime_t;
+
+typedef struct {
     uint8_t valid;
     uint32_t unicode_letter;
     uint32_t glyph_id;
@@ -59,9 +64,9 @@ typedef struct {
 } ui_spiffs_glyph_cache_entry_t;
 
 typedef struct {
-    lv_fs_file_t file;
+    FILE * file;
     ui_spiffs_font_header_t header;
-    lv_font_fmt_txt_cmap_t * cmaps;
+    ui_spiffs_cmap_runtime_t * cmap_records;
     uint32_t cmap_count;
     uint32_t table_base_offset;
     uint32_t glyph_count;
@@ -78,12 +83,17 @@ typedef struct {
 } ui_spiffs_font_dsc_t;
 
 typedef struct {
-    lv_fs_file_t * fp;
+    FILE * fp;
     int8_t bit_pos;
     uint8_t byte_value;
 } ui_bit_iterator_t;
 
 static const char * TAG = "ui_font_spiffs";
+
+typedef int ui_fs_res_t;
+
+#define UI_FS_RES_OK 0
+#define UI_FS_RES_ERR (-1)
 
 static void ui_log_font_heap(const char * stage, size_t base_heap)
 {
@@ -97,7 +107,66 @@ static void ui_log_font_heap(const char * stage, size_t base_heap)
     }
 }
 
-static ui_bit_iterator_t ui_bit_iterator_init(lv_fs_file_t * fp)
+static const char * ui_font_resolve_path(const char * path)
+{
+    if(path == NULL) {
+        return NULL;
+    }
+
+    if(path[0] != '\0' && path[1] == ':') {
+        return path + 2;
+    }
+
+    return path;
+}
+
+static ui_fs_res_t ui_fs_open(FILE ** fp, const char * path)
+{
+    const char * resolved = ui_font_resolve_path(path);
+    FILE * file;
+
+    if(resolved == NULL || resolved[0] == '\0') {
+        return UI_FS_RES_ERR;
+    }
+
+    file = fopen(resolved, "rb");
+    if(file == NULL) {
+        return UI_FS_RES_ERR;
+    }
+
+    *fp = file;
+    return UI_FS_RES_OK;
+}
+
+static void ui_fs_close(FILE * fp)
+{
+    if(fp != NULL) {
+        fclose(fp);
+    }
+}
+
+static ui_fs_res_t ui_fs_seek(FILE * fp, uint32_t pos)
+{
+    return (fp != NULL && fseek(fp, (long)pos, SEEK_SET) == 0) ? UI_FS_RES_OK : UI_FS_RES_ERR;
+}
+
+static ui_fs_res_t ui_fs_read(FILE * fp, void * buf, size_t len, uint32_t * out_len)
+{
+    size_t n;
+
+    if(fp == NULL) {
+        return UI_FS_RES_ERR;
+    }
+
+    n = fread(buf, 1U, len, fp);
+    if(out_len != NULL) {
+        *out_len = (uint32_t)n;
+    }
+
+    return (n == len) ? UI_FS_RES_OK : UI_FS_RES_ERR;
+}
+
+static ui_bit_iterator_t ui_bit_iterator_init(FILE * fp)
 {
     ui_bit_iterator_t it;
     it.fp = fp;
@@ -106,7 +175,7 @@ static ui_bit_iterator_t ui_bit_iterator_init(lv_fs_file_t * fp)
     return it;
 }
 
-static unsigned int ui_read_bits(ui_bit_iterator_t * it, int n_bits, lv_fs_res_t * res)
+static unsigned int ui_read_bits(ui_bit_iterator_t * it, int n_bits, ui_fs_res_t * res)
 {
     unsigned int value = 0;
 
@@ -116,8 +185,8 @@ static unsigned int ui_read_bits(ui_bit_iterator_t * it, int n_bits, lv_fs_res_t
 
         if(it->bit_pos < 0) {
             it->bit_pos = 7;
-            *res = lv_fs_read(it->fp, &(it->byte_value), 1, NULL);
-            if(*res != LV_FS_RES_OK) {
+            *res = ui_fs_read(it->fp, &(it->byte_value), 1, NULL);
+            if(*res != UI_FS_RES_OK) {
                 return 0;
             }
         }
@@ -125,11 +194,11 @@ static unsigned int ui_read_bits(ui_bit_iterator_t * it, int n_bits, lv_fs_res_t
         value |= ((it->byte_value & 0x80U) ? 1U : 0U) << n_bits;
     }
 
-    *res = LV_FS_RES_OK;
+    *res = UI_FS_RES_OK;
     return value;
 }
 
-static int ui_read_bits_signed(ui_bit_iterator_t * it, int n_bits, lv_fs_res_t * res)
+static int ui_read_bits_signed(ui_bit_iterator_t * it, int n_bits, ui_fs_res_t * res)
 {
     unsigned int value = ui_read_bits(it, n_bits, res);
 
@@ -140,17 +209,17 @@ static int ui_read_bits_signed(ui_bit_iterator_t * it, int n_bits, lv_fs_res_t *
     return (int)value;
 }
 
-static int32_t ui_read_label_at(lv_fs_file_t * fp, uint32_t absolute_offset, const char * label)
+static int32_t ui_read_label_at(FILE * fp, uint32_t absolute_offset, const char * label)
 {
     uint32_t length;
     char buf[4];
 
-    if(lv_fs_seek(fp, absolute_offset, LV_FS_SEEK_SET) != LV_FS_RES_OK) {
+    if(ui_fs_seek(fp, absolute_offset) != UI_FS_RES_OK) {
         return -1;
     }
 
-    if(lv_fs_read(fp, &length, sizeof(length), NULL) != LV_FS_RES_OK ||
-       lv_fs_read(fp, buf, sizeof(buf), NULL) != LV_FS_RES_OK ||
+    if(ui_fs_read(fp, &length, sizeof(length), NULL) != UI_FS_RES_OK ||
+       ui_fs_read(fp, buf, sizeof(buf), NULL) != UI_FS_RES_OK ||
        memcmp(label, buf, sizeof(buf)) != 0) {
         return -1;
     }
@@ -160,27 +229,43 @@ static int32_t ui_read_label_at(lv_fs_file_t * fp, uint32_t absolute_offset, con
 
 static int32_t ui_read_label(ui_spiffs_font_dsc_t * dsc, uint32_t start, const char * label)
 {
-    return ui_read_label_at(&dsc->file, dsc->table_base_offset + start, label);
+    return ui_read_label_at(dsc->file, dsc->table_base_offset + start, label);
 }
 
-static int ui_find_unicode(const uint16_t * list, uint16_t len, uint16_t key)
+static bool ui_fs_read_at(FILE * fp, uint32_t offset, void * buf, size_t len)
+{
+    return ui_fs_seek(fp, offset) == UI_FS_RES_OK && ui_fs_read(fp, buf, len, NULL) == UI_FS_RES_OK;
+}
+
+static bool ui_fs_read_u8_at(FILE * fp, uint32_t offset, uint8_t * value)
+{
+    return ui_fs_read_at(fp, offset, value, sizeof(*value));
+}
+
+static bool ui_fs_read_u16_at(FILE * fp, uint32_t offset, uint16_t * value)
+{
+    return ui_fs_read_at(fp, offset, value, sizeof(*value));
+}
+
+static int ui_find_unicode_in_file(FILE * fp, uint32_t list_offset, uint16_t len, uint16_t key)
 {
     int left = 0;
     int right = (int)len - 1;
 
     while(left <= right) {
         int mid = left + ((right - left) / 2);
-        uint16_t value = list[mid];
+        uint16_t value = 0;
+
+        if(!ui_fs_read_u16_at(fp, list_offset + (uint32_t)mid * (uint32_t)sizeof(uint16_t), &value)) {
+            return -1;
+        }
 
         if(value == key) {
             return mid;
         }
 
-        if(value < key) {
-            left = mid + 1;
-        } else {
-            right = mid - 1;
-        }
+        if(value < key) left = mid + 1;
+        else right = mid - 1;
     }
 
     return -1;
@@ -199,37 +284,44 @@ static uint32_t ui_get_glyph_id(ui_spiffs_font_dsc_t * dsc, uint32_t letter)
     }
 
     for(i = 0; i < dsc->cmap_count; i++) {
-        const lv_font_fmt_txt_cmap_t * cmap = &dsc->cmaps[i];
+        const ui_spiffs_cmap_runtime_t * cmap = &dsc->cmap_records[i];
         uint32_t rcp;
         uint32_t glyph_id = 0;
+        uint16_t ofs16 = 0;
+        uint8_t ofs8 = 0;
 
-        if(letter < cmap->range_start) {
+        if(letter < cmap->table.range_start) {
             continue;
         }
 
-        rcp = letter - cmap->range_start;
-        if(rcp > cmap->range_length) {
+        rcp = letter - cmap->table.range_start;
+        if(rcp > cmap->table.range_length) {
             continue;
         }
 
-        switch(cmap->type) {
+        switch(cmap->table.format_type) {
             case LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY:
-                glyph_id = cmap->glyph_id_start + rcp;
+                glyph_id = cmap->table.glyph_id_start + rcp;
                 break;
             case LV_FONT_FMT_TXT_CMAP_FORMAT0_FULL:
-                glyph_id = cmap->glyph_id_start + ((const uint8_t *)cmap->glyph_id_ofs_list)[rcp];
+                if(ui_fs_read_u8_at(dsc->file, cmap->data_start + rcp, &ofs8)) {
+                    glyph_id = cmap->table.glyph_id_start + ofs8;
+                }
                 break;
             case LV_FONT_FMT_TXT_CMAP_SPARSE_TINY: {
-                int found = ui_find_unicode(cmap->unicode_list, cmap->list_length, (uint16_t)rcp);
+                int found = ui_find_unicode_in_file(dsc->file, cmap->data_start, cmap->table.data_entries_count, (uint16_t)rcp);
                 if(found >= 0) {
-                    glyph_id = cmap->glyph_id_start + (uint32_t)found;
+                    glyph_id = cmap->table.glyph_id_start + (uint32_t)found;
                 }
                 break;
             }
             case LV_FONT_FMT_TXT_CMAP_SPARSE_FULL: {
-                int found = ui_find_unicode(cmap->unicode_list, cmap->list_length, (uint16_t)rcp);
-                if(found >= 0) {
-                    glyph_id = cmap->glyph_id_start + ((const uint16_t *)cmap->glyph_id_ofs_list)[found];
+                int found = ui_find_unicode_in_file(dsc->file, cmap->data_start, cmap->table.data_entries_count, (uint16_t)rcp);
+                uint32_t glyph_ofs_base = cmap->data_start + (uint32_t)cmap->table.data_entries_count * (uint32_t)sizeof(uint16_t);
+                if(found >= 0 && ui_fs_read_u16_at(dsc->file,
+                                                   glyph_ofs_base + (uint32_t)found * (uint32_t)sizeof(uint16_t),
+                                                   &ofs16)) {
+                    glyph_id = cmap->table.glyph_id_start + ofs16;
                 }
                 break;
             }
@@ -291,7 +383,7 @@ static ui_spiffs_glyph_cache_entry_t * ui_glyph_cache_get_slot(ui_spiffs_font_ds
 static bool ui_read_glyph_dsc(ui_spiffs_font_dsc_t * dsc, uint32_t glyph_id, lv_font_fmt_txt_glyph_dsc_t * gdsc_out,
                               uint32_t * bmp_size_out)
 {
-    lv_fs_res_t res;
+    ui_fs_res_t res;
     ui_bit_iterator_t bit_it;
     uint32_t offset;
     uint32_t next_offset;
@@ -314,40 +406,40 @@ static bool ui_read_glyph_dsc(ui_spiffs_font_dsc_t * dsc, uint32_t glyph_id, lv_
         uint16_t offset16 = 0;
         uint16_t next_offset16 = 0;
 
-        res = lv_fs_seek(&dsc->file, dsc->loca_start + glyph_id * (uint32_t)sizeof(offset16), LV_FS_SEEK_SET);
-        if(res != LV_FS_RES_OK) {
+        res = ui_fs_seek(dsc->file, dsc->loca_start + glyph_id * (uint32_t)sizeof(offset16));
+        if(res != UI_FS_RES_OK) {
             return false;
         }
 
-        res = lv_fs_read(&dsc->file, &offset16, sizeof(offset16), NULL);
-        if(res != LV_FS_RES_OK) {
+        res = ui_fs_read(dsc->file, &offset16, sizeof(offset16), NULL);
+        if(res != UI_FS_RES_OK) {
             return false;
         }
 
         offset = offset16;
         next_offset = dsc->glyf_length;
         if(glyph_id < (dsc->glyph_count - 1)) {
-            res = lv_fs_read(&dsc->file, &next_offset16, sizeof(next_offset16), NULL);
-            if(res != LV_FS_RES_OK) {
+            res = ui_fs_read(dsc->file, &next_offset16, sizeof(next_offset16), NULL);
+            if(res != UI_FS_RES_OK) {
                 return false;
             }
             next_offset = next_offset16;
         }
     } else if(dsc->header.index_to_loc_format == 1) {
-        res = lv_fs_seek(&dsc->file, dsc->loca_start + glyph_id * (uint32_t)sizeof(offset), LV_FS_SEEK_SET);
-        if(res != LV_FS_RES_OK) {
+        res = ui_fs_seek(dsc->file, dsc->loca_start + glyph_id * (uint32_t)sizeof(offset));
+        if(res != UI_FS_RES_OK) {
             return false;
         }
 
-        res = lv_fs_read(&dsc->file, &offset, sizeof(offset), NULL);
-        if(res != LV_FS_RES_OK) {
+        res = ui_fs_read(dsc->file, &offset, sizeof(offset), NULL);
+        if(res != UI_FS_RES_OK) {
             return false;
         }
 
         next_offset = dsc->glyf_length;
         if(glyph_id < (dsc->glyph_count - 1)) {
-            res = lv_fs_read(&dsc->file, &next_offset, sizeof(next_offset), NULL);
-            if(res != LV_FS_RES_OK) {
+            res = ui_fs_read(dsc->file, &next_offset, sizeof(next_offset), NULL);
+            if(res != UI_FS_RES_OK) {
                 return false;
             }
         }
@@ -355,18 +447,18 @@ static bool ui_read_glyph_dsc(ui_spiffs_font_dsc_t * dsc, uint32_t glyph_id, lv_
         return false;
     }
 
-    res = lv_fs_seek(&dsc->file, dsc->glyf_start + offset, LV_FS_SEEK_SET);
-    if(res != LV_FS_RES_OK) {
+    res = ui_fs_seek(dsc->file, dsc->glyf_start + offset);
+    if(res != UI_FS_RES_OK) {
         return false;
     }
 
-    bit_it = ui_bit_iterator_init(&dsc->file);
+    bit_it = ui_bit_iterator_init(dsc->file);
 
     if(dsc->header.advance_width_bits == 0) {
         gdsc_out->adv_w = dsc->header.default_advance_width;
     } else {
         gdsc_out->adv_w = ui_read_bits(&bit_it, dsc->header.advance_width_bits, &res);
-        if(res != LV_FS_RES_OK) {
+        if(res != UI_FS_RES_OK) {
             return false;
         }
     }
@@ -376,22 +468,22 @@ static bool ui_read_glyph_dsc(ui_spiffs_font_dsc_t * dsc, uint32_t glyph_id, lv_
     }
 
     gdsc_out->ofs_x = (int8_t)ui_read_bits_signed(&bit_it, dsc->header.xy_bits, &res);
-    if(res != LV_FS_RES_OK) {
+    if(res != UI_FS_RES_OK) {
         return false;
     }
 
     gdsc_out->ofs_y = (int8_t)ui_read_bits_signed(&bit_it, dsc->header.xy_bits, &res);
-    if(res != LV_FS_RES_OK) {
+    if(res != UI_FS_RES_OK) {
         return false;
     }
 
     gdsc_out->box_w = (uint8_t)ui_read_bits(&bit_it, dsc->header.wh_bits, &res);
-    if(res != LV_FS_RES_OK) {
+    if(res != UI_FS_RES_OK) {
         return false;
     }
 
     gdsc_out->box_h = (uint8_t)ui_read_bits(&bit_it, dsc->header.wh_bits, &res);
-    if(res != LV_FS_RES_OK) {
+    if(res != UI_FS_RES_OK) {
         return false;
     }
 
@@ -409,7 +501,7 @@ static bool ui_read_glyph_dsc(ui_spiffs_font_dsc_t * dsc, uint32_t glyph_id, lv_
 
 static bool ui_read_glyph_bitmap_data(ui_spiffs_font_dsc_t * dsc, uint32_t glyph_id, uint32_t bmp_size, uint8_t * bitmap_out)
 {
-    lv_fs_res_t res;
+    ui_fs_res_t res;
     ui_bit_iterator_t bit_it;
     uint32_t bit_count;
     uint32_t glyph_offset;
@@ -422,58 +514,58 @@ static bool ui_read_glyph_bitmap_data(ui_spiffs_font_dsc_t * dsc, uint32_t glyph
     if(dsc->header.index_to_loc_format == 0) {
         uint16_t offset16 = 0;
 
-        res = lv_fs_seek(&dsc->file, dsc->loca_start + glyph_id * (uint32_t)sizeof(offset16), LV_FS_SEEK_SET);
-        if(res != LV_FS_RES_OK) {
+        res = ui_fs_seek(dsc->file, dsc->loca_start + glyph_id * (uint32_t)sizeof(offset16));
+        if(res != UI_FS_RES_OK) {
             return false;
         }
 
-        res = lv_fs_read(&dsc->file, &offset16, sizeof(offset16), NULL);
-        if(res != LV_FS_RES_OK) {
+        res = ui_fs_read(dsc->file, &offset16, sizeof(offset16), NULL);
+        if(res != UI_FS_RES_OK) {
             return false;
         }
 
         glyph_offset = offset16;
     } else if(dsc->header.index_to_loc_format == 1) {
-        res = lv_fs_seek(&dsc->file, dsc->loca_start + glyph_id * (uint32_t)sizeof(glyph_offset), LV_FS_SEEK_SET);
-        if(res != LV_FS_RES_OK) {
+        res = ui_fs_seek(dsc->file, dsc->loca_start + glyph_id * (uint32_t)sizeof(glyph_offset));
+        if(res != UI_FS_RES_OK) {
             return false;
         }
 
-        res = lv_fs_read(&dsc->file, &glyph_offset, sizeof(glyph_offset), NULL);
-        if(res != LV_FS_RES_OK) {
+        res = ui_fs_read(dsc->file, &glyph_offset, sizeof(glyph_offset), NULL);
+        if(res != UI_FS_RES_OK) {
             return false;
         }
     } else {
         return false;
     }
 
-    res = lv_fs_seek(&dsc->file, dsc->glyf_start + glyph_offset, LV_FS_SEEK_SET);
-    if(res != LV_FS_RES_OK) {
+    res = ui_fs_seek(dsc->file, dsc->glyf_start + glyph_offset);
+    if(res != UI_FS_RES_OK) {
         return false;
     }
 
-    bit_it = ui_bit_iterator_init(&dsc->file);
+    bit_it = ui_bit_iterator_init(dsc->file);
     bit_count = dsc->header.advance_width_bits + 2U * dsc->header.xy_bits + 2U * dsc->header.wh_bits;
 
     ui_read_bits(&bit_it, (int)bit_count, &res);
-    if(res != LV_FS_RES_OK) {
+    if(res != UI_FS_RES_OK) {
         return false;
     }
 
     if((bit_count % 8U) == 0U) {
-        if(lv_fs_read(&dsc->file, bitmap_out, bmp_size, NULL) != LV_FS_RES_OK) {
+        if(ui_fs_read(dsc->file, bitmap_out, bmp_size, NULL) != UI_FS_RES_OK) {
             return false;
         }
     } else {
         for(i = 0; i + 1U < bmp_size; i++) {
             bitmap_out[i] = (uint8_t)ui_read_bits(&bit_it, 8, &res);
-            if(res != LV_FS_RES_OK) {
+            if(res != UI_FS_RES_OK) {
                 return false;
             }
         }
 
         bitmap_out[bmp_size - 1U] = (uint8_t)ui_read_bits(&bit_it, 8 - (int)(bit_count % 8U), &res);
-        if(res != LV_FS_RES_OK) {
+        if(res != UI_FS_RES_OK) {
             return false;
         }
 
@@ -587,24 +679,12 @@ static bool ui_spiffs_font_get_glyph_dsc(const lv_font_t * font, lv_font_glyph_d
 
 static void ui_spiffs_font_release_cmaps(ui_spiffs_font_dsc_t * dsc)
 {
-    uint32_t i;
-
-    if(dsc->cmaps == NULL) {
+    if(dsc->cmap_records == NULL) {
         return;
     }
 
-    for(i = 0; i < dsc->cmap_count; i++) {
-        if(dsc->cmaps[i].glyph_id_ofs_list != NULL) {
-            lv_mem_free((void *)dsc->cmaps[i].glyph_id_ofs_list);
-        }
-
-        if(dsc->cmaps[i].unicode_list != NULL) {
-            lv_mem_free((void *)dsc->cmaps[i].unicode_list);
-        }
-    }
-
-    lv_mem_free(dsc->cmaps);
-    dsc->cmaps = NULL;
+    lv_mem_free(dsc->cmap_records);
+    dsc->cmap_records = NULL;
 }
 
 static void ui_spiffs_font_release_glyph_cache(ui_spiffs_font_dsc_t * dsc)
@@ -644,7 +724,7 @@ lv_font_t * ui_spiffs_font_load(const char * path)
     memset(font, 0, sizeof(*font));
     memset(dsc, 0, sizeof(*dsc));
 
-    if(lv_fs_open(&dsc->file, path, LV_FS_MODE_RD) != LV_FS_RES_OK) {
+    if(ui_fs_open(&dsc->file, path) != UI_FS_RES_OK) {
         ESP_LOGW(TAG, "Open font file failed: %s", path);
         goto fail;
     }
@@ -655,7 +735,7 @@ lv_font_t * ui_spiffs_font_load(const char * path)
         uint8_t probe[12];
         uint32_t probe_len = 0;
 
-        if(lv_fs_read(&dsc->file, probe, sizeof(probe), &probe_len) != LV_FS_RES_OK) {
+        if(ui_fs_read(dsc->file, probe, sizeof(probe), &probe_len) != UI_FS_RES_OK) {
             ESP_LOGW(TAG, "Read font probe failed: %s", path);
             goto fail;
         }
@@ -664,7 +744,7 @@ lv_font_t * ui_spiffs_font_load(const char * path)
             goto fail;
         }
 
-        if(lv_fs_seek(&dsc->file, 0, LV_FS_SEEK_SET) != LV_FS_RES_OK) {
+        if(ui_fs_seek(dsc->file, 0) != UI_FS_RES_OK) {
             ESP_LOGW(TAG, "Seek font probe reset failed: %s", path);
             goto fail;
         }
@@ -685,7 +765,7 @@ lv_font_t * ui_spiffs_font_load(const char * path)
         goto fail;
     }
 
-    if(lv_fs_read(&dsc->file, &dsc->header, sizeof(dsc->header), NULL) != LV_FS_RES_OK) {
+    if(ui_fs_read(dsc->file, &dsc->header, sizeof(dsc->header), NULL) != UI_FS_RES_OK) {
         ESP_LOGW(TAG, "Read head body failed: %s", path);
         goto fail;
     }
@@ -696,88 +776,30 @@ lv_font_t * ui_spiffs_font_load(const char * path)
         goto fail;
     }
 
-    if(lv_fs_read(&dsc->file, &cmaps_count, sizeof(cmaps_count), NULL) != LV_FS_RES_OK) {
+    if(ui_fs_read(dsc->file, &cmaps_count, sizeof(cmaps_count), NULL) != UI_FS_RES_OK) {
         ESP_LOGW(TAG, "Read cmap count failed: %s", path);
         goto fail;
     }
 
-    dsc->cmaps = lv_mem_alloc(sizeof(lv_font_fmt_txt_cmap_t) * cmaps_count);
+    dsc->cmap_records = lv_mem_alloc(sizeof(ui_spiffs_cmap_runtime_t) * cmaps_count);
     tables = lv_mem_alloc(sizeof(ui_spiffs_cmap_table_t) * cmaps_count);
-    if(dsc->cmaps == NULL || tables == NULL) {
+    if(dsc->cmap_records == NULL || tables == NULL) {
         goto fail;
     }
 
-    memset(dsc->cmaps, 0, sizeof(lv_font_fmt_txt_cmap_t) * cmaps_count);
+    memset(dsc->cmap_records, 0, sizeof(ui_spiffs_cmap_runtime_t) * cmaps_count);
     dsc->cmap_count = cmaps_count;
 
     ui_log_font_heap("alloc cmap headers", heap_start);
 
-    if(lv_fs_read(&dsc->file, tables, sizeof(ui_spiffs_cmap_table_t) * cmaps_count, NULL) != LV_FS_RES_OK) {
+    if(ui_fs_read(dsc->file, tables, sizeof(ui_spiffs_cmap_table_t) * cmaps_count, NULL) != UI_FS_RES_OK) {
         ESP_LOGW(TAG, "Read cmap tables failed: %s count=%u", path, (unsigned)cmaps_count);
         goto fail;
     }
 
     for(i = 0; i < cmaps_count; i++) {
-        lv_font_fmt_txt_cmap_t * cmap = &dsc->cmaps[i];
-
-        cmap->range_start = tables[i].range_start;
-        cmap->range_length = tables[i].range_length;
-        cmap->glyph_id_start = tables[i].glyph_id_start;
-        cmap->type = tables[i].format_type;
-
-        if(lv_fs_seek(&dsc->file, dsc->table_base_offset + (uint32_t)header_length + tables[i].data_offset,
-                      LV_FS_SEEK_SET) != LV_FS_RES_OK) {
-            ESP_LOGW(TAG, "Seek cmap data failed: %s idx=%u ofs=%u", path, (unsigned)i, (unsigned)tables[i].data_offset);
-            goto fail;
-        }
-
-        switch(tables[i].format_type) {
-            case LV_FONT_FMT_TXT_CMAP_FORMAT0_FULL: {
-                uint8_t * glyph_id_ofs = lv_mem_alloc(tables[i].data_entries_count);
-                if(glyph_id_ofs == NULL) {
-                    goto fail;
-                }
-                cmap->glyph_id_ofs_list = glyph_id_ofs;
-                cmap->list_length = tables[i].range_length;
-                if(lv_fs_read(&dsc->file, glyph_id_ofs, tables[i].data_entries_count, NULL) != LV_FS_RES_OK) {
-                    ESP_LOGW(TAG, "Read cmap full data failed: %s idx=%u", path, (unsigned)i);
-                    goto fail;
-                }
-                break;
-            }
-            case LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY:
-                break;
-            case LV_FONT_FMT_TXT_CMAP_SPARSE_TINY:
-            case LV_FONT_FMT_TXT_CMAP_SPARSE_FULL: {
-                uint32_t list_bytes = (uint32_t)tables[i].data_entries_count * sizeof(uint16_t);
-                uint16_t * unicode_list = lv_mem_alloc(list_bytes);
-                if(unicode_list == NULL) {
-                    goto fail;
-                }
-                cmap->unicode_list = unicode_list;
-                cmap->list_length = tables[i].data_entries_count;
-                if(lv_fs_read(&dsc->file, unicode_list, list_bytes, NULL) != LV_FS_RES_OK) {
-                    ESP_LOGW(TAG, "Read cmap unicode list failed: %s idx=%u", path, (unsigned)i);
-                    goto fail;
-                }
-
-                if(tables[i].format_type == LV_FONT_FMT_TXT_CMAP_SPARSE_FULL) {
-                    uint16_t * glyph_id_ofs = lv_mem_alloc(list_bytes);
-                    if(glyph_id_ofs == NULL) {
-                        goto fail;
-                    }
-                    cmap->glyph_id_ofs_list = glyph_id_ofs;
-                    if(lv_fs_read(&dsc->file, glyph_id_ofs, list_bytes, NULL) != LV_FS_RES_OK) {
-                        ESP_LOGW(TAG, "Read cmap sparse glyph ids failed: %s idx=%u", path, (unsigned)i);
-                        goto fail;
-                    }
-                }
-                break;
-            }
-            default:
-                ESP_LOGW(TAG, "Unsupported cmap type: %u", (unsigned)tables[i].format_type);
-                goto fail;
-        }
+        dsc->cmap_records[i].table = tables[i];
+        dsc->cmap_records[i].data_start = dsc->table_base_offset + (uint32_t)header_length + tables[i].data_offset;
     }
 
     lv_mem_free(tables);
@@ -790,7 +812,7 @@ lv_font_t * ui_spiffs_font_load(const char * path)
         goto fail;
     }
 
-    if(lv_fs_read(&dsc->file, &dsc->glyph_count, sizeof(dsc->glyph_count), NULL) != LV_FS_RES_OK) {
+    if(ui_fs_read(dsc->file, &dsc->glyph_count, sizeof(dsc->glyph_count), NULL) != UI_FS_RES_OK) {
         ESP_LOGW(TAG, "Read loca count failed: %s", path);
         goto fail;
     }
@@ -806,7 +828,7 @@ lv_font_t * ui_spiffs_font_load(const char * path)
     ui_log_font_heap("loca on-demand", heap_start);
 
     dsc->glyf_start = dsc->table_base_offset + (uint32_t)header_length + (uint32_t)cmaps_length + (uint32_t)loca_length;
-    glyf_length = ui_read_label_at(&dsc->file, dsc->glyf_start, "glyf");
+    glyf_length = ui_read_label_at(dsc->file, dsc->glyf_start, "glyf");
     if(glyf_length < 0) {
         ESP_LOGW(TAG, "Read glyf label failed: %s start=%u", path, (unsigned)dsc->glyf_start);
         goto fail;
@@ -836,8 +858,8 @@ fail:
         if(dsc->bitmap_cache != NULL) {
             lv_mem_free(dsc->bitmap_cache);
         }
-        if(dsc->file.drv != NULL) {
-            lv_fs_close(&dsc->file);
+        if(dsc->file != NULL) {
+            ui_fs_close(dsc->file);
         }
         lv_mem_free(dsc);
     }
@@ -862,8 +884,8 @@ void ui_spiffs_font_free(lv_font_t * font)
         if(dsc->bitmap_cache != NULL) {
             lv_mem_free(dsc->bitmap_cache);
         }
-        if(dsc->file.drv != NULL) {
-            lv_fs_close(&dsc->file);
+        if(dsc->file != NULL) {
+            ui_fs_close(dsc->file);
         }
         lv_mem_free(dsc);
     }

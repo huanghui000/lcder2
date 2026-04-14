@@ -19,6 +19,7 @@ lv_obj_t * ui_WeatherContent;
 lv_obj_t * ui_WeatherPageNow;
 lv_obj_t * ui_WeatherPageToday;
 lv_obj_t * ui_WeatherPageTomorrow;
+lv_obj_t * ui_QuotePage;
 lv_obj_t * ui_LabelNowTitle;
 lv_obj_t * ui_LabelNowIcon;
 lv_obj_t * ui_LabelNowText;
@@ -37,6 +38,9 @@ lv_obj_t * ui_LabelTomorrowText;
 lv_obj_t * ui_LabelTomorrowTemp;
 lv_obj_t * ui_LabelTomorrowWindDir;
 lv_obj_t * ui_LabelTomorrowWindSpeed;
+lv_obj_t * ui_LabelQuoteTitle;
+lv_obj_t * ui_LabelQuoteText;
+lv_obj_t * ui_LabelQuoteAuthor;
 
 lv_obj_t * ui____initial_actions0;
 

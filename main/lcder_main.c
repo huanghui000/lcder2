@@ -73,6 +73,7 @@ static uint8_t s_keys_filtered;
 static volatile char s_force_weather_screen;
 static volatile char s_request_portal_start;
 static volatile char s_sntp_task_running;
+static volatile char s_weather_after_sntp_pending;
 static TickType_t s_qr_deadline;
 static TickType_t s_weather_page_deadline;
 static uint8_t s_weather_page_index;
@@ -170,7 +171,7 @@ static void app_set_weather_page_locked(uint8_t page_index, char animated)
 {
     int32_t target_x;
 
-    page_index = (uint8_t)(page_index % 3);
+    page_index = (uint8_t)(page_index % 4);
     target_x = -(int32_t)(page_index * 160);
     s_weather_page_index = page_index;
 
@@ -282,7 +283,13 @@ void lv_task(void *pvParameters)
         }
         else if (lv_scr_act() == ui_Screen1 && s_weather_page_deadline != 0 && now >= s_weather_page_deadline)
         {
-            app_set_weather_page_locked((uint8_t)(s_weather_page_index + 1), 1);
+            uint8_t next_page = (uint8_t)(s_weather_page_index + 1);
+            next_page = (uint8_t)(next_page % 4);
+            if (next_page == 2)
+            {
+                http_seniverse_request_hitokoto_refresh();
+            }
+            app_set_weather_page_locked(next_page, 1);
             s_weather_page_deadline = now + pdMS_TO_TICKS(WEATHER_PAGE_INTERVAL_MS);
         }
         else if (lv_scr_act() == s_qr_screen && s_qr_deadline != 0 && now >= s_qr_deadline)
@@ -370,6 +377,13 @@ static void sntp_task(void *arg)
 
     ESP_LOGI(TAG, "Free heap size: %d", esp_get_free_heap_size());
     s_sntp_task_running = 0;
+    if (s_weather_after_sntp_pending && is_wifi_connected != 0)
+    {
+        s_weather_after_sntp_pending = 0;
+        http_seniverse_request_refresh();
+        ESP_LOGI(TAG, "trigger weather refresh after SNTP, heap=%u",
+            (unsigned)esp_get_free_heap_size());
+    }
     vTaskDelete(NULL);
 }
 
@@ -475,6 +489,7 @@ void app_main(void)
     xSemaphoreTake(xLvglMutex, portMAX_DELAY);
     ui_init();
     startup_ui_init();
+    startup_ui_set_hold_visible(1);
     startup_ui_show_status("System", "Preparing UI and network", 8);
     startup_ui_process();
     lv_task_handler();
@@ -513,16 +528,21 @@ void app_main(void)
 
             if (!last_wifi_connected)
             {
-                weather_refresh_sec = WEATHER_REFRESH_INTERVAL_S - WEATHER_REFRESH_START_DELAY_S;
+                weather_refresh_sec = 0;
                 sntp_sync_sec = 0;
+                s_weather_after_sntp_pending = 1;
                 if (app_request_sntp_sync() == ESP_OK)
                 {
-                    ESP_LOGI(TAG, "sntp_task started after WiFi got IP, heap=%u",
+                    ESP_LOGI(TAG, "sntp_task started after WiFi got IP, weather refresh pending after sync, heap=%u",
                         (unsigned)esp_get_free_heap_size());
                 }
-                ESP_LOGI(TAG, "WiFi got IP, schedule weather refresh in %u s, heap=%u",
-                    (unsigned)WEATHER_REFRESH_START_DELAY_S,
-                    (unsigned)esp_get_free_heap_size());
+                else
+                {
+                    s_weather_after_sntp_pending = 0;
+                    http_seniverse_request_refresh();
+                    ESP_LOGW(TAG, "SNTP start failed, trigger weather refresh immediately, heap=%u",
+                        (unsigned)esp_get_free_heap_size());
+                }
             }
 
             if (weather_refresh_sec++ >= WEATHER_REFRESH_INTERVAL_S)

@@ -12,5 +12,6 @@ esp_err_t http_seniverse_set_location_by_query(const char *query,
     char *resolved_name, size_t resolved_name_len,
     char *resolved_detail, size_t resolved_detail_len);
 void http_seniverse_request_refresh(void);
+void http_seniverse_request_hitokoto_refresh(void);
 
 #endif
